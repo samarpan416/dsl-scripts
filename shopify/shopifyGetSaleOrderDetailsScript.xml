@@ -624,7 +624,6 @@
 		<var name="saleOrderTransactionsIterator" value="#{#saleOrderTransactionsJson.getAsJsonArray().iterator()}" />
 		<var name="cashOnDelivery" value="#{false}" />
 		<var name="giftDiscount" value="#{T(java.math.BigDecimal).ZERO}" />
-		<var name="partiallyPaidAmount" value="#{T(java.math.BigDecimal).ZERO}" />
 		<var name="isOrderConfirmed" value="#{#saleOrderJson.get('confirmed').getAsBoolean()}" />
 		<var name="fulfillmentStatus" value="#{#saleOrderJson.get('fulfillment_status')}" />
 		<while condition="#{#saleOrderTransactionsIterator.hasNext()}">
@@ -672,7 +671,7 @@
 					</if>
 					<!-- Calculating partiallyPaidAmount -->
 					<if condition="#{#fetchPartiallyPaidOrders and 'partially_paid'.equals(#gateway.getAsString())}">
-						<var name="partiallyPaidAmount" value="#{#partiallyPaidAmount.add(#transactionAmount)}" />
+						<var name="partiallyPaidAmount" value="#{#partiallyPaidAmount == null ? #transactionAmount : #partiallyPaidAmount.add(#transactionAmount)}" />
 					</if>
 				</if>
 
@@ -692,24 +691,23 @@
 			<log level="info" value="#{#TAG} SaleOrderTransaction : #{#saleOrderTransaction.toString()}, giftDiscount: #{#giftDiscount}, cashOnDelivery : #{#cashOnDelivery}" />
 		</while>
 
+		<if condition="#{#fetchPartiallyPaidOrders and 'partially_paid'.equalsIgnoreCase(#financialStatus) and #partiallyPaidAmount == null}" >
+			<scriptError message="Skipping order #{#saleOrderCode} since no transaction found with gateway partially_paid" />
+		</if>
+
 		<if condition="#{
-            #isOrderConfirmed
-            and 
+            #isOrderConfirmed and 
             (
-                #fulfillmentStatus.isJsonNull() 
-                or 
-                #fulfillmentStatus.getAsString().equals('null') 
-                or 
+                #fulfillmentStatus.isJsonNull() or 
+                #fulfillmentStatus.getAsString().equals('null') or 
                 #fulfillmentStatus.getAsString().equals('partial')
             )
         }">
 			<!-- For COD orders or prepaid orders -->
 			<if condition="#{
-                #cashOnDelivery 
-                or 
+                #cashOnDelivery or 
                 (
-                    !#saleOrderJson.get('financial_status').isJsonNull() 
-                    and 
+                    !#saleOrderJson.get('financial_status').isJsonNull() and 
                     'PAID'.equalsIgnoreCase(#saleOrderJson.get('financial_status').getAsString())
                 )}">
 
