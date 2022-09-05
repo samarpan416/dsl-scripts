@@ -54,6 +54,16 @@
 		</if>
 	</method>
 
+	<method name="getShippingLineDiscount">
+		<var name="discountAllocationsIterator" value="#{#shippingLine.get('discount_allocations').getAsJsonArray().iterator()}" />
+		<var name="totalShippingLineDiscount" value="#{T(java.math.BigDecimal).ZERO}" />
+		<while condition="#{#discountAllocationsIterator.hasNext()}">
+			<var name="discountAllocation" value="#{#discountAllocationsIterator.next()}" />
+			<var name="discountAmount" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#discountAllocation.get('amount').getAsString())}" />
+			<var name="totalShippingLineDiscount" value="#{#totalShippingLineDiscount.add(#discountAmount)}" />
+		</while>
+	</method>
+
 	<method name="populateCustomFields">
 		<var name="customFieldMap" value="#{new java.util.HashMap()}" />
 		<if condition="#{#customFieldsCustomization == null or ''.equals(#customFieldsCustomization)}">
@@ -352,15 +362,19 @@
 		<var name="totalOrderDiscount" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#saleOrderJson.get('total_discounts').getAsString())}" />
 		<log level="info" value="#{#TAG} totalOrderDiscount : #{#totalOrderDiscount}" />
 
-		<var name="shippingChargesIterator" value="#{#saleOrderJson.get('shipping_lines').getAsJsonArray().iterator()}" />
+		<var name="shippingLinesIterator" value="#{#saleOrderJson.get('shipping_lines').getAsJsonArray().iterator()}" />
 		<var name="shippingCharges" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(0.00)}" />
-		<if condition="#{#shippingChargesIterator.hasNext()}">
-			<var name="charge" value="#{#shippingChargesIterator.next()}" />
-			<var name="title" value="#{#charge.get('title').getAsString()}" />
+		<var name="totalShippingDiscount" value="#{T(java.math.BigDecimal).ZERO}" />
+		<if condition="#{#shippingLinesIterator.hasNext()}">
+			<var name="shippingLine" value="#{#shippingLinesIterator.next()}" />
+			<var name="title" value="#{#shippingLine.get('title').getAsString()}" />
+			<invoke method="getShippingLineDiscount">
+				<param name="shippingLine" value="#{#shippingLine}" />
+			</invoke>
 			<if condition="#{#title.contains('Cash on Delivery')}">
-				<var name="codCharges" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#charge.get('price').getAsString())}" />
+				<var name="codCharges" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#shippingLine.get('price').getAsString())}" />
 				<else>
-					<var name="shippingCharges" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#charge.get('price').getAsString())}" />
+					<var name="shippingCharges" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#shippingLine.get('price').getAsString())}" />
 				</else>
 			</if>
 		</if>
