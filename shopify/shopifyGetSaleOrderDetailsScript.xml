@@ -331,7 +331,10 @@
 		</if>
 		<valueTag name="TotalShippingCharges" value="#{#shippingCharges}" />
 		<valueTag name="TotalCashOnDeliveryCharges" value="#{#codCharges!=null?#codCharges: T(com.unifier.core.utils.NumberUtils).newBigDecimal(0.00)}" />
-		<var name="prepaidAmount" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#giftDiscount)}" />
+		<var name="prepaidAmount" value="#{#giftDiscount}" />
+		<if condition="#{#fetchPartiallyPaidOrders}">
+			<var name="prepaidAmount" value="#{#prepaidAmount.add(#partiallyPaidAmount)}" />
+		</if>
 		<var name="subtotal" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#saleOrderJson.get('total_line_items_price').getAsString())}" />
 		<var name="totalOrderAmount" value="#{#shippingCharges.add(#subtotal)}" />
 		<if condition="#{(#prepaidAmount.add(#discount)) &gt; #totalOrderAmount}">
@@ -471,21 +474,12 @@
 				</if>
 				<var name="giftMessage" value="" />
 				<var name="propertiesIterator" value="#{#itemJson.get('properties').getAsJsonArray().iterator()}" />
-				<!--
-				<if condition="#{#propertiesIterator.hasNext()}">
-					<var name="giftMessage" value="#{#itemJson.get('properties').toString()}" />
-				</if>
-				-->
 
 				<while condition="#{#propertiesIterator.hasNext()}">
 					<var name="propertyItem" value="#{#propertiesIterator.next()}" />
 					<try>
 						<var name="propertyItemName" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#propertyItem, 'name')}" />
 						<var name="propertyItemValue" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#propertyItem, 'value')}" />
-						<!--
-                        <if condition="#{'NOTE'.equalsIgnoreCase(#propertyItemName)}">
-                            <var name="giftMessage" value="#{#propertyItemValue}" />
-                        </if> -->
 						<if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#giftMessage)}">
 							<var name="giftMessage" value="#{#giftMessage+','+#propertyItemName+':'+#propertyItemValue}" />
 							<else>
@@ -586,9 +580,11 @@
 
 	<log level="info" value="#{#TAG} url : #{#url}, authHeaders : #{#authHeaders.toString()}" />
 
-
+	<!-- Add a config parameter -->
+	<var name="fetchPartiallyPaidOrders" value="#{#fetchPartiallyPaidOrders == null ? false : #fetchPartiallyPaidOrders}" />
 	<log level="debug" value="#{#TAG} SaleOrderDetailElement : #{#saleOrderDetailElement.toString()}" />
 	<var name="saleOrderJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#saleOrderDetailElement)}" />
+	<var name="financialStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderJson, 'financial_status')}" />
 
 	<if condition="#{#applicableProvinceCodes != null}">
 		<var name="provinces" value="#{#applicableProvinceCodes.split(',')}" />
@@ -627,7 +623,8 @@
 		<log level="info" value="#{#TAG} SaleOrderTransactionsArray : #{#saleOrderTransactionsJson.toString()}" />
 		<var name="saleOrderTransactionsIterator" value="#{#saleOrderTransactionsJson.getAsJsonArray().iterator()}" />
 		<var name="cashOnDelivery" value="#{false}" />
-		<var name="giftDiscount" value="#{0}" />
+		<var name="giftDiscount" value="#{T(java.math.BigDecimal).ZERO}" />
+		<var name="partiallyPaidAmount" value="#{T(java.math.BigDecimal).ZERO}" />
 		<var name="isOrderConfirmed" value="#{#saleOrderJson.get('confirmed').getAsBoolean()}" />
 		<var name="fulfillmentStatus" value="#{#saleOrderJson.get('fulfillment_status')}" />
 		<while condition="#{#saleOrderTransactionsIterator.hasNext()}">
@@ -637,48 +634,49 @@
 			<var name="gateway" value="#{#saleOrderTransaction.get('gateway')}" />
 
 			<if condition="#{
-                !#gateway.isJsonNull() 
-                and 
+                !#gateway.isJsonNull() and 
                 (
-                    'PENDING'.equalsIgnoreCase(#transactionStatus) 
-                    or 
+                    'PENDING'.equalsIgnoreCase(#transactionStatus) or 
                     'SUCCESS'.equalsIgnoreCase(#transactionStatus)
                 )}">
 
 				<!-- Checking COD and todo: good comment for draft order-->
-				<if condition="#{
-                    #gateway.getAsString().contains('COD') 
-                    or 
-                    #gateway.getAsString().toLowerCase().contains('cash on delivery') 
-                    or 
-                    #gateway.getAsString().toLowerCase().contains('cash_on_delivery') 
-                    or 
-                    (
-                        #syncDraftOrders =='true' 
-                        and 
-                        #gateway.getAsString().toLowerCase().contains('manual') 
-                        and 
-                        (
-                            #saleOrderJson.get('financial_status').isJsonNull() 
-                            or 
-                            !#saleOrderJson.get('financial_status').getAsString().toLowerCase().equals('paid')
-                        )
-                    )}">
+				<if condition="#{#fetchPartiallyPaidOrders and 'partially_paid'.equalsIgnoreCase(#financialStatus)}">
 					<var name="cashOnDelivery" value="#{true}" />
 					<else>
-						<var name="cashOnDelivery" value="#{false}" />
+						<if condition="#{
+						#gateway.getAsString().contains('COD') or
+						#gateway.getAsString().toLowerCase().contains('cash on delivery') or
+						#gateway.getAsString().toLowerCase().contains('cash_on_delivery') or
+						(
+							#syncDraftOrders =='true' and 
+							#gateway.getAsString().toLowerCase().contains('manual') and
+							(
+								#saleOrderJson.get('financial_status').isJsonNull() or
+								!#saleOrderJson.get('financial_status').getAsString().toLowerCase().equals('paid')
+							)
+						)}">
+							<var name="cashOnDelivery" value="#{true}" />
+							<else>
+								<var name="cashOnDelivery" value="#{false}" />
+							</else>
+						</if>
 					</else>
 				</if>
-				<!-- Calculating giftDiscount -->
-				<var name="transactionKind" value="#{#saleOrderTransaction.get('kind').getAsString()}" />
-				<if condition="#{'gift_card'.equalsIgnoreCase(#gateway.getAsString()) and 'success'.equalsIgnoreCase(#transactionStatus)}">
-					<if condition="#{'REFUND'.equalsIgnoreCase(#transactionKind)}">
-						<var name="giftDiscount" value="#{#giftDiscount - #saleOrderTransaction.get('amountSet').get('shopMoney').get('amount').getAsDouble()}" />
-						<else>
-							<var name="giftDiscount" value="#{#saleOrderTransaction.get('amountSet').get('shopMoney').get('amount').getAsDouble() + #giftDiscount}" />
-						</else>
+				<if condition="#{'SUCCESS'.equalsIgnoreCase(#transactionStatus)}">
+					<var name="transactionAmount" value="#{#saleOrderTransaction.get('amountSet').get('shopMoney').get('amount').getAsBigDecimal()}" />
+					<!-- Calculating giftDiscount -->
+					<if condition="#{'gift_card'.equalsIgnoreCase(#gateway.getAsString())}">
+						<var name="transactionKind" value="#{#saleOrderTransaction.get('kind').getAsString()}" />
+						<var name="giftDiscount" value="#{'REFUND'.equalsIgnoreCase(#transactionKind) ? #giftDiscount.subtract(#transactionAmount) : #giftDiscount.add(#transactionAmount)}" />
+					</if>
+					<!-- Calculating partiallyPaidAmount -->
+					<if condition="#{#fetchPartiallyPaidOrders and 'partially_paid'.equals(#gateway.getAsString())}">
+						<var name="partiallyPaidAmount" value="#{#partiallyPaidAmount.add(#transactionAmount)}" />
 					</if>
 				</if>
+
+				<!-- Populating receiptJson -->
 				<if condition="#{#customFieldsCustomization != null and #customFieldsCustomization.contains('receiptJson')}">
 					<var name="receipt" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderTransaction, 'receipt')}" />
 					<if condition="#{#receipt != null}">
@@ -693,6 +691,7 @@
 			</if>
 			<log level="info" value="#{#TAG} SaleOrderTransaction : #{#saleOrderTransaction.toString()}, giftDiscount: #{#giftDiscount}, cashOnDelivery : #{#cashOnDelivery}" />
 		</while>
+
 		<if condition="#{
             #isOrderConfirmed
             and 
