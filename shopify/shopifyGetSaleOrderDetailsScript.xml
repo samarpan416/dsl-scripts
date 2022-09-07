@@ -624,6 +624,9 @@
 		<var name="saleOrderTransactionsIterator" value="#{#saleOrderTransactionsJson.getAsJsonArray().iterator()}" />
 		<var name="cashOnDelivery" value="#{false}" />
 		<var name="giftDiscount" value="#{T(java.math.BigDecimal).ZERO}" />
+		<var name="partiallyPaidAmount" value="#{T(java.math.BigDecimal).ZERO}" />
+		<var name="giftDiscountTransactionFound" value="#{false}" />
+		<var name="partiallyPaidTransactionFound" value="#{false}" />
 		<var name="isOrderConfirmed" value="#{#saleOrderJson.get('confirmed').getAsBoolean()}" />
 		<var name="fulfillmentStatus" value="#{#saleOrderJson.get('fulfillment_status')}" />
 		<while condition="#{#saleOrderTransactionsIterator.hasNext()}">
@@ -666,12 +669,14 @@
 					<var name="transactionAmount" value="#{#saleOrderTransaction.get('amountSet').get('shopMoney').get('amount').getAsBigDecimal()}" />
 					<!-- Calculating giftDiscount -->
 					<if condition="#{'gift_card'.equalsIgnoreCase(#gateway.getAsString())}">
+						<var name="giftDiscountTransactionFound" value="#{true}" />
 						<var name="transactionKind" value="#{#saleOrderTransaction.get('kind').getAsString()}" />
 						<var name="giftDiscount" value="#{'REFUND'.equalsIgnoreCase(#transactionKind) ? #giftDiscount.subtract(#transactionAmount) : #giftDiscount.add(#transactionAmount)}" />
 					</if>
 					<!-- Calculating partiallyPaidAmount -->
 					<if condition="#{#fetchPartiallyPaidOrders and 'partially_paid'.equals(#gateway.getAsString())}">
-						<var name="partiallyPaidAmount" value="#{#partiallyPaidAmount == null ? #transactionAmount : #partiallyPaidAmount.add(#transactionAmount)}" />
+						<var name="partiallyPaidTransactionFound" value="#{true}" />
+						<var name="partiallyPaidAmount" value="#{#partiallyPaidAmount.add(#transactionAmount)}" />
 					</if>
 				</if>
 
@@ -691,38 +696,40 @@
 			<log level="info" value="#{#TAG} SaleOrderTransaction : #{#saleOrderTransaction.toString()}, giftDiscount: #{#giftDiscount}, cashOnDelivery : #{#cashOnDelivery}" />
 		</while>
 
-		<if condition="#{#fetchPartiallyPaidOrders and 'partially_paid'.equalsIgnoreCase(#financialStatus) and #partiallyPaidAmount == null}" >
-			<scriptError message="Skipping order #{#saleOrderCode} since no transaction found with gateway partially_paid" />
-		</if>
-
-		<if condition="#{
-            #isOrderConfirmed and 
-            (
-                #fulfillmentStatus.isJsonNull() or 
-                #fulfillmentStatus.getAsString().equals('null') or 
-                #fulfillmentStatus.getAsString().equals('partial')
-            )
-        }">
-			<!-- For COD orders or prepaid orders -->
-			<if condition="#{
-                #cashOnDelivery or 
-                (
-                    !#saleOrderJson.get('financial_status').isJsonNull() and 
-                    'PAID'.equalsIgnoreCase(#saleOrderJson.get('financial_status').getAsString())
-                )}">
-
-				<!-- Create order-details -->
-				<invoke method="addSaleOrder" />
-
-				<else>
-					<!-- NOTE: Not throwing an error here, if scriptOutput is blank then order is skipped -->
-					<log level="info" value="#{#TAG} Skipping sale order #{#saleOrderCode}. CashOnDelivery : #{#cashOnDelivery}, Financial Status : #{#saleOrderJson.get('financial_status').getAsString()}" />
-				</else>
-			</if>
+		<if condition="#{#fetchPartiallyPaidOrders and 'partially_paid'.equalsIgnoreCase(#financialStatus) and !#giftDiscountTransactionFound and !#partiallyPaidTransactionFound}">
+			<log level="info" value="Skipping order #{#saleOrderCode} since no transaction found with gateway partially_paid or gift_card" />
 			<else>
-				<log level="info" value="#{#TAG} Skipping sale order #{#saleOrderCode}. Confirmed : #{#isOrderConfirmed} , Fulfillment Status : #{#fulfillmentStatus}}" />
+				<if condition="#{
+					#isOrderConfirmed and 
+					(
+						#fulfillmentStatus.isJsonNull() or 
+						#fulfillmentStatus.getAsString().equals('null') or 
+						#fulfillmentStatus.getAsString().equals('partial')
+					)
+				}">
+					<!-- For COD orders or prepaid orders -->
+					<if condition="#{
+						#cashOnDelivery or 
+						(
+							!#saleOrderJson.get('financial_status').isJsonNull() and 
+							'PAID'.equalsIgnoreCase(#saleOrderJson.get('financial_status').getAsString())
+						)}">
+
+						<!-- Create order-details -->
+						<invoke method="addSaleOrder" />
+
+						<else>
+							<!-- NOTE: Not throwing an error here, if scriptOutput is blank then order is skipped -->
+							<log level="info" value="#{#TAG} Skipping sale order #{#saleOrderCode}. CashOnDelivery : #{#cashOnDelivery}, Financial Status : #{#saleOrderJson.get('financial_status').getAsString()}" />
+						</else>
+					</if>
+					<else>
+						<log level="info" value="#{#TAG} Skipping sale order #{#saleOrderCode}. Confirmed : #{#isOrderConfirmed} , Fulfillment Status : #{#fulfillmentStatus}}" />
+					</else>
+				</if>
 			</else>
 		</if>
+
 		<else>
 			<log level="info" value="#{#TAG} Skipping sale order #{#saleOrderCode}. ProvinceCode : #{#provinceCode} not allowed." />
 		</else>
