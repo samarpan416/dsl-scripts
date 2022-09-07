@@ -1,0 +1,187 @@
+<scraper name="ajioOmniGetSaleOrderDetailsScript" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.unicommerce.com/schema/scraper-1.0.xsd">
+
+	<var name="TAG" value="[ajioOmniGetSaleOrderDetailsScript]" />
+
+	<log level="info" value="#{#TAG} store_code : #{#store_code}" />
+
+	<method name="addAddressDetail">
+		<startTag name="Address">
+			<attribute name="id" value="#{#ref}" />
+		</startTag>
+		<valueTag name="Name" value="#{ #addressDetail.party.name }" cdata="true" />
+		<valueTag name="AddressLine1" value="#{ #addressDetail.addressLine1.replaceAll('\n', '') }" cdata="true" />
+		<if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#addressDetail.addressLine2)}">
+			<valueTag name="AddressLine2" value="#{ #addressDetail.addressLine2.replaceAll('\n', '') }" cdata="true" />
+		</if>
+		<valueTag name="City" value="#{ #addressDetail.city }" cdata="true" />
+		<valueTag name="State" value="#{ #addressDetail.stateCode }" cdata="true" />
+		<valueTag name="Country" value="#{ #addressDetail.countryCode }" cdata="true" />
+		<valueTag name="Pincode" value="#{ #addressDetail.pincode }" cdata="true" />
+		<valueTag name="Phone" value="#{ #addressDetail.phone }" cdata="true" />
+		<endTag name="Address" />
+	</method>
+
+	<method name="isHoppableFacility">
+		<foreach collection="#{#channel.associatedFacilities}" var="caf">
+			<var name="cafCode" value="#{#caf.facility.code}" />
+			<if condition="#{#cafCode.equals(#store_code)}">
+				<var name="isHoppingEnabledSystemConfig" value="#{T(com.unifier.core.configuration.ConfigurationManager).getInstance().getConfiguration('baseSystemConfiguration').getSystemConfigByNameAndFacility('is.hopping.enabled' , #caf.facility.id)}" />
+				<if condition="#{#isHoppingEnabledSystemConfig != null}">
+					<var name="isHoppableFacility" value="#{T(Boolean).parseBoolean(#isHoppingEnabledSystemConfig.value)}" />
+					<log level="info" value="#{#TAG} cafCode : #{#cafCode} , isHoppableFacility : #{#isHoppableFacility}" />
+					<else>
+						<log level="info" value="#{#TAG} cafCode : #{#cafCode} , isHoppingEnabledSystemConfig is null" />
+					</else>
+				</if>
+				<break />
+				<else>
+					<log level="debug" value="#{#TAG} cafCode : #{#cafCode} is not equals to store_code : #{#store_code}" />
+				</else>
+			</if>
+		</foreach>
+		<if condition="#{#isHoppableFacility == null}">
+			<log level="info" value="#{#TAG} Facility with code : #{#store_code} not found in channel.associatedFacilities" />
+			<!-- Assuming non-hoppable facility -->
+			<var name="isHoppableFacility" value="#{false}" />
+		</if>
+	</method>
+
+	<var name="orderDetail" value="#{#saleOrderDetailElement}" />
+	<log level="info" value="#{#TAG} OrderDetail : #{#orderDetail.toString()}" />
+
+	<startTag name="CreateSaleOrderRequest">
+		<attribute name="xmlns" value="http://uniware.unicommerce.com/services/" />
+	</startTag>
+	<startTag name="SaleOrder" />
+	<valueTag name="Code" value="#{#orderDetail.get('order_id').getAsString()}" cdata="true" />
+	<valueTag name="DisplayOrderCode" value="#{#orderDetail.get('order_id').getAsString()}" cdata="true" />
+
+	<var name="uniwareDatePattern" value="yyyy-MM-dd'T'HH:mm:ss.SSSXXX" />
+	<if condition="#{ #orderDetail.get('order_date') != null and !#orderDetail.get('order_date').isJsonNull()}">
+		<var name="orderDateTime" value="#{#orderDetail.get('order_date').getAsLong() * 1000}" />
+		<var name="displayOrderDateTime" value="#{new java.util.Date(#orderDateTime)}" />
+		<!-- Adding +0530 to orderDateTime because we didn't mention it properly in ajioOmni API documentation. -->
+		<!--
+		<if condition="#{!#orderDateTime.contains('+0530')}">
+			<var name="orderDateTime" value="#{#orderDateTime + '+0530'}"/>
+			<log level="info" value="Added +0530 in orderDateTime : #{#orderDateTime}" />
+		</if>
+		-->
+		<valueTag name="DisplayOrderDateTime" value="#{T(com.unifier.core.utils.DateUtils).dateToString(#displayOrderDateTime, #uniwareDatePattern)}" cdata="true" />
+
+		<var name="fulfillmentTat" value="#{T(com.unifier.core.utils.DateUtils).dateToString(T(com.unifier.core.utils.DateUtils).addDaysToDate(#displayOrderDateTime, 5), #uniwareDatePattern)}" />
+		<valueTag name="FulfillmentTat" value="#{#fulfillmentTat}" cdata="true" />
+	</if>
+
+	<if condition="#{#channel.customer == null}">
+		<scriptError message="Configure a customer on channel." />
+	</if>
+
+	<var name="channelCustomer" value="#{#metadata.get('customer')}" />
+
+	<if condition="#{#orderDetail.get('payment_method') != null and !#orderDetail.get('payment_method').isJsonNull() and #orderDetail.get('payment_method').getAsString().toLowerCase().equals('cod')}">
+		<valueTag name="CashOnDelivery" value="true" />
+		<else>
+			<valueTag name="CashOnDelivery" value="false" />
+		</else>
+	</if>
+
+	<valueTag name="CustomerCode" value="#{#channelCustomer.code}" />
+	<var name="billingAddress" value="#{#channelCustomer.getPartyAddressByType('BILLING')}" />
+	<var name="shippingAddress" value="#{#channelCustomer.getPartyAddressByType('SHIPPING')}" />
+
+	<if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#shippingAddress.phone)}">
+		<valueTag name="NotificationMobile" value="#{#shippingAddress.phone}" />
+	</if>
+
+	<startTag name="Addresses" />
+
+	<invoke method="addAddressDetail">
+		<param name="addressDetail" value="#{#shippingAddress}" />
+		<param name="ref" value="#{1}" />
+	</invoke>
+
+	<invoke method="addAddressDetail">
+		<param name="addressDetail" value="#{#billingAddress}" />
+		<param name="ref" value="#{2}" />
+	</invoke>
+
+	<endTag name="Addresses" />
+
+	<startTag name="ShippingAddress">
+		<attribute name="ref" value="1" />
+	</startTag>
+	<endTag name="ShippingAddress" />
+
+	<startTag name="BillingAddress">
+		<attribute name="ref" value="2" />
+	</startTag>
+	<endTag name="BillingAddress" />
+
+	<startTag name="SaleOrderItems" />
+	<var name="orderItemsIterator" value="#{#orderDetail.get('order_lines').getAsJsonArray().iterator()}" />
+	<while condition="#{#orderItemsIterator.hasNext()}">
+		<var name="itemJson" value="#{#orderItemsIterator.next()}" />
+		<var name="quantity" value="#{new java.math.BigDecimal(#itemJson.get('ordered_quantity').getAsInt())}" />
+
+		<var name="counter" value="#{#itemJson.get('ordered_quantity').getAsInt()}" />
+		<while condition="#{#counter &gt; 0}">
+			<startTag name="SaleOrderItem" />
+			<var name="itemCode" value="#{#itemJson.get('order_item_id').getAsString()}" />
+			<valueTag name="Code" value="#{#itemCode}-#{#counter}" cdata="true" />
+			<var name="counter" value="#{#counter - 1}" />
+			<valueTag name="ChannelSaleOrderItemCode" value="#{#itemJson.get('order_item_id').getAsString()}" cdata="true" />
+
+			<!-- This is done since in ajioOmniItemTypeDetailScript script, we get seperate product and variant id, wherease in this api, we only get  -->
+			<var name="variantId" value="#{#itemJson.get('item_details').getAsJsonObject().get('item_code').getAsString()}" />
+			<var name="productId" value="#{#variantId.substring(0, #variantId.length() - 3)}" />
+			<valueTag name="ItemSKU" value="#{#productId}-#{#variantId}" cdata="true" />
+			<valueTag name="ChannelProductId" value="#{#productId}-#{#variantId}" cdata="true" />
+
+			<var name="itemTitle" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#itemJson.get('item_details').getAsJsonObject(), 'name')}" />
+			<if condition="#{#itemTitle.length() > 255 }">
+				<var name="itemTitle" value="#{#itemTitle.substring(0,255)}" />
+			</if>
+			<valueTag name="ItemName" value="#{#itemTitle}" cdata="true" />
+			<valueTag name="ShippingMethodCode" value="STD" />
+
+			<valueTag name="PacketNumber" value="1" />
+
+			<if condition="#{#itemJson.get('mrp') != null and !#itemJson.get('mrp').isJsonNull() and T(com.unifier.core.utils.StringUtils).isNotBlank(#itemJson.get('mrp').getAsString()) }">
+				<valueTag name="TotalPrice" value="#{new java.math.BigDecimal(#itemJson.get('mrp').getAsString())}" />
+			</if>
+			<if condition="#{#itemJson.get('seller_discount') != null and !#itemJson.get('seller_discount').isJsonNull() and T(com.unifier.core.utils.StringUtils).isNotBlank(#itemJson.get('seller_discount').getAsString()) }">
+				<var name="discount" value="#{new java.math.BigDecimal(#itemJson.get('seller_discount').getAsString())}" />
+				<var name="discount" value="#{#discount.abs()}" />
+				<valueTag name="Discount" value="#{#discount}" />
+			</if>
+			<if condition="#{#itemJson.get('mrp') != null and !#itemJson.get('mrp').isJsonNull() and T(com.unifier.core.utils.StringUtils).isNotBlank(#itemJson.get('mrp').getAsString()) }">
+				<if condition="#{#discount == null}">
+					<var name="discount" value="#{new java.math.BigDecimal(0)}" />
+				</if>
+				<var name="sellingPrice" value="#{new java.math.BigDecimal(#itemJson.get('mrp').getAsString()).subtract(#discount)}" />
+				<if condition="#{#sellingPrice &gt; 0}">
+					<valueTag name="SellingPrice" value="#{#sellingPrice}" />
+					<else>
+						<var name="sellingPrice" value="#{new java.math.BigDecimal(0)}" />
+						<valueTag name="SellingPrice" value="#{#sellingPrice}" />
+					</else>
+				</if>
+			</if>
+
+			<valueTag name="FacilityCode" value="#{#store_code}" />
+
+
+			<endTag name="SaleOrderItem" />
+		</while>
+
+	</while>
+	<endTag name="SaleOrderItems" />
+
+	<invoke method="isHoppableFacility" />
+	<valueTag name="VerificationRequired" value="#{!#isHoppableFacility}" />
+
+	<endTag name="SaleOrder" />
+	<endTag name="CreateSaleOrderRequest" />
+
+</scraper>
