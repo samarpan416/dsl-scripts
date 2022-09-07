@@ -21,31 +21,6 @@
 		<endTag name="Address" />
 	</method>
 
-	<method name="isHoppableFacility">
-		<foreach collection="#{#channel.associatedFacilities}" var="caf">
-			<var name="cafCode" value="#{#caf.facility.code}" />
-			<if condition="#{#cafCode.equals(#store_code)}">
-				<var name="isHoppingEnabledSystemConfig" value="#{T(com.unifier.core.configuration.ConfigurationManager).getInstance().getConfiguration('baseSystemConfiguration').getSystemConfigByNameAndFacility('is.hopping.enabled' , #caf.facility.id)}" />
-				<if condition="#{#isHoppingEnabledSystemConfig != null}">
-					<var name="isHoppableFacility" value="#{T(Boolean).parseBoolean(#isHoppingEnabledSystemConfig.value)}" />
-					<log level="info" value="#{#TAG} cafCode : #{#cafCode} , isHoppableFacility : #{#isHoppableFacility}" />
-					<else>
-						<log level="info" value="#{#TAG} cafCode : #{#cafCode} , isHoppingEnabledSystemConfig is null" />
-					</else>
-				</if>
-				<break />
-				<else>
-					<log level="debug" value="#{#TAG} cafCode : #{#cafCode} is not equals to store_code : #{#store_code}" />
-				</else>
-			</if>
-		</foreach>
-		<if condition="#{#isHoppableFacility == null}">
-			<log level="info" value="#{#TAG} Facility with code : #{#store_code} not found in channel.associatedFacilities" />
-			<!-- Assuming non-hoppable facility -->
-			<var name="isHoppableFacility" value="#{false}" />
-		</if>
-	</method>
-
 	<var name="orderDetail" value="#{#saleOrderDetailElement}" />
 	<log level="info" value="#{#TAG} OrderDetail : #{#orderDetail.toString()}" />
 
@@ -54,7 +29,7 @@
 	</startTag>
 	<startTag name="SaleOrder" />
 	<valueTag name="Code" value="#{#orderDetail.get('order_id').getAsString()}" cdata="true" />
-	<valueTag name="DisplayOrderCode" value="#{#orderDetail.get('order_id').getAsString()}" cdata="true" />
+	<valueTag name="DisplayOrderCode" value="#{#orderDetail.get('po_number').getAsString()}" cdata="true" />
 
 	<var name="uniwareDatePattern" value="yyyy-MM-dd'T'HH:mm:ss.SSSXXX" />
 	<if condition="#{ #orderDetail.get('order_date') != null and !#orderDetail.get('order_date').isJsonNull()}">
@@ -122,9 +97,9 @@
 	<var name="orderItemsIterator" value="#{#orderDetail.get('order_lines').getAsJsonArray().iterator()}" />
 	<while condition="#{#orderItemsIterator.hasNext()}">
 		<var name="itemJson" value="#{#orderItemsIterator.next()}" />
-		<var name="quantity" value="#{new java.math.BigDecimal(#itemJson.get('ordered_quantity').getAsInt())}" />
+		<var name="quantity" value="#{new java.math.BigDecimal(#itemJson.get('quantity').getAsInt())}" />
 
-		<var name="counter" value="#{#itemJson.get('ordered_quantity').getAsInt()}" />
+		<var name="counter" value="#{#itemJson.get('quantity').getAsInt()}" />
 		<while condition="#{#counter &gt; 0}">
 			<startTag name="SaleOrderItem" />
 			<var name="itemCode" value="#{#itemJson.get('order_item_id').getAsString()}" />
@@ -144,30 +119,14 @@
 			</if>
 			<valueTag name="ItemName" value="#{#itemTitle}" cdata="true" />
 			<valueTag name="ShippingMethodCode" value="STD" />
-
+			<valueTag name="ChannelMrp" value="#{new java.math.BigDecimal(#itemJson.get('mrp').getAsString())}" />
 			<valueTag name="PacketNumber" value="1" />
 
-			<if condition="#{#itemJson.get('mrp') != null and !#itemJson.get('mrp').isJsonNull() and T(com.unifier.core.utils.StringUtils).isNotBlank(#itemJson.get('mrp').getAsString()) }">
-				<valueTag name="TotalPrice" value="#{new java.math.BigDecimal(#itemJson.get('mrp').getAsString())}" />
+			<if condition="#{#itemJson.get('po_line_amount') != null and !#itemJson.get('po_line_amount').isJsonNull() and T(com.unifier.core.utils.StringUtils).isNotBlank(#itemJson.get('po_line_amount').getAsString()) }">
+				<valueTag name="TotalPrice" value="#{new java.math.BigDecimal(#itemJson.get('po_line_amount').getAsString())}" />
+				<valueTag name="SellingPrice" value="#{new java.math.BigDecimal(#itemJson.get('po_line_amount').getAsString())}" />
 			</if>
-			<if condition="#{#itemJson.get('seller_discount') != null and !#itemJson.get('seller_discount').isJsonNull() and T(com.unifier.core.utils.StringUtils).isNotBlank(#itemJson.get('seller_discount').getAsString()) }">
-				<var name="discount" value="#{new java.math.BigDecimal(#itemJson.get('seller_discount').getAsString())}" />
-				<var name="discount" value="#{#discount.abs()}" />
-				<valueTag name="Discount" value="#{#discount}" />
-			</if>
-			<if condition="#{#itemJson.get('mrp') != null and !#itemJson.get('mrp').isJsonNull() and T(com.unifier.core.utils.StringUtils).isNotBlank(#itemJson.get('mrp').getAsString()) }">
-				<if condition="#{#discount == null}">
-					<var name="discount" value="#{new java.math.BigDecimal(0)}" />
-				</if>
-				<var name="sellingPrice" value="#{new java.math.BigDecimal(#itemJson.get('mrp').getAsString()).subtract(#discount)}" />
-				<if condition="#{#sellingPrice &gt; 0}">
-					<valueTag name="SellingPrice" value="#{#sellingPrice}" />
-					<else>
-						<var name="sellingPrice" value="#{new java.math.BigDecimal(0)}" />
-						<valueTag name="SellingPrice" value="#{#sellingPrice}" />
-					</else>
-				</if>
-			</if>
+			<valueTag name="Discount" value="#{new java.math.BigDecimal(0)}" />
 
 			<valueTag name="FacilityCode" value="#{#store_code}" />
 
@@ -177,9 +136,6 @@
 
 	</while>
 	<endTag name="SaleOrderItems" />
-
-	<invoke method="isHoppableFacility" />
-	<valueTag name="VerificationRequired" value="#{!#isHoppableFacility}" />
 
 	<endTag name="SaleOrder" />
 	<endTag name="CreateSaleOrderRequest" />
