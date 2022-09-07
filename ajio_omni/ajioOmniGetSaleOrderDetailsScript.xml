@@ -21,6 +21,35 @@
 		<endTag name="Address" />
 	</method>
 
+	<method name="addSaleOrderItem">
+		<startTag name="SaleOrderItem" />
+			<valueTag name="Code" value="#{#itemCode}-#{#counter}" cdata="true" />
+			<valueTag name="ChannelSaleOrderItemCode" value="#{#orderLine.get('order_item_id').getAsString()}" cdata="true" />
+
+			<!-- This is done since in ajioOmniItemTypeDetailScript script, we get seperate product and variant id, wherease in this api, we only get  -->
+			<var name="variantId" value="#{#orderLine.get('item_details').getAsJsonObject().get('item_code').getAsString()}" />
+			<var name="productId" value="#{#variantId.substring(0, #variantId.length() - 3)}" />
+			<valueTag name="ItemSKU" value="#{#productId}-#{#variantId}" cdata="true" />
+			<valueTag name="ChannelProductId" value="#{#productId}-#{#variantId}" cdata="true" />
+
+			<var name="itemTitle" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#orderLine.get('item_details').getAsJsonObject(), 'name')}" />
+			<if condition="#{#itemTitle.length() > 255 }">
+				<var name="itemTitle" value="#{#itemTitle.substring(0,255)}" />
+			</if>
+			<valueTag name="ItemName" value="#{#itemTitle}" cdata="true" />
+			<valueTag name="ShippingMethodCode" value="STD" />
+			<var name="orderLineMrp" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#orderLine, 'mrp')}" />
+			<if condition="#{#orderLineMrp != null}" >
+				<valueTag name="ChannelMrp" value="#{new java.math.BigDecimal(#orderLineMrp)}" />
+			</if>
+			<valueTag name="PacketNumber" value="1" />
+			<valueTag name="TotalPrice" value="#{#poLineAmountPerQty}" />
+			<valueTag name="SellingPrice" value="#{#poLineAmountPerQty}" />
+			<valueTag name="Discount" value="#{T(java.math.BigDecimal).ZERO}" />
+			<valueTag name="FacilityCode" value="#{#store_code}" />
+		<endTag name="SaleOrderItem" />
+	</method>
+
 	<var name="orderDetail" value="#{#saleOrderDetailElement}" />
 	<log level="info" value="#{#TAG} OrderDetail : #{#orderDetail.toString()}" />
 
@@ -28,7 +57,8 @@
 		<attribute name="xmlns" value="http://uniware.unicommerce.com/services/" />
 	</startTag>
 	<startTag name="SaleOrder" />
-	<valueTag name="Code" value="#{#orderDetail.get('order_id').getAsString()}" cdata="true" />
+	<var name="saleOrderCode" value="#{#orderDetail.get('order_id').getAsString()}" />
+	<valueTag name="Code" value="#{#saleOrderCode}" cdata="true" />
 	<valueTag name="DisplayOrderCode" value="#{#orderDetail.get('po_number').getAsString()}" cdata="true" />
 
 	<var name="uniwareDatePattern" value="yyyy-MM-dd'T'HH:mm:ss.SSSXXX" />
@@ -94,47 +124,27 @@
 	<endTag name="BillingAddress" />
 
 	<startTag name="SaleOrderItems" />
-	<var name="orderItemsIterator" value="#{#orderDetail.get('order_lines').getAsJsonArray().iterator()}" />
-	<while condition="#{#orderItemsIterator.hasNext()}">
-		<var name="itemJson" value="#{#orderItemsIterator.next()}" />
-		<var name="quantity" value="#{new java.math.BigDecimal(#itemJson.get('quantity').getAsInt())}" />
-
-		<var name="counter" value="#{#itemJson.get('quantity').getAsInt()}" />
-		<while condition="#{#counter &gt; 0}">
-			<startTag name="SaleOrderItem" />
-			<var name="itemCode" value="#{#itemJson.get('order_item_id').getAsString()}" />
-			<valueTag name="Code" value="#{#itemCode}-#{#counter}" cdata="true" />
-			<var name="counter" value="#{#counter - 1}" />
-			<valueTag name="ChannelSaleOrderItemCode" value="#{#itemJson.get('order_item_id').getAsString()}" cdata="true" />
-
-			<!-- This is done since in ajioOmniItemTypeDetailScript script, we get seperate product and variant id, wherease in this api, we only get  -->
-			<var name="variantId" value="#{#itemJson.get('item_details').getAsJsonObject().get('item_code').getAsString()}" />
-			<var name="productId" value="#{#variantId.substring(0, #variantId.length() - 3)}" />
-			<valueTag name="ItemSKU" value="#{#productId}-#{#variantId}" cdata="true" />
-			<valueTag name="ChannelProductId" value="#{#productId}-#{#variantId}" cdata="true" />
-
-			<var name="itemTitle" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#itemJson.get('item_details').getAsJsonObject(), 'name')}" />
-			<if condition="#{#itemTitle.length() > 255 }">
-				<var name="itemTitle" value="#{#itemTitle.substring(0,255)}" />
+		<var name="orderLinesIterator" value="#{#orderDetail.get('order_lines').getAsJsonArray().iterator()}" />
+		<while condition="#{#orderLinesIterator.hasNext()}">
+			<var name="orderLine" value="#{#orderLinesIterator.next()}" />
+			<var name="orderLineQty" value="#{#orderLine.get('quantity').getAsInt()}" />
+			<var name="counter" value="#{#orderLineQty}" />
+			<var name="poLineAmount" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#orderLine, 'po_line_amount')}" />
+			<var name="itemCode" value="#{#orderLine.get('order_item_id').getAsString()}" />
+			
+			<if condition="#{T(com.unifier.core.utils.StringUtils).isBlank(#poLineAmount)}">
+				<scriptError message="po_line_amount is null for order_item_id : #{#itemCode}" />
 			</if>
-			<valueTag name="ItemName" value="#{#itemTitle}" cdata="true" />
-			<valueTag name="ShippingMethodCode" value="STD" />
-			<valueTag name="ChannelMrp" value="#{new java.math.BigDecimal(#itemJson.get('mrp').getAsString())}" />
-			<valueTag name="PacketNumber" value="1" />
+			
+			<var name="poLineAmountBD" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#poLineAmount)}" />
+			<var name="poLineQuantityBD" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#orderLineQty)}" />
+			<var name="poLineAmountPerQty" value="#{#poLineAmountBD.divide(#poLineQuantityBD, 2, T(java.math.RoundingMode).HALF_EVEN)}" />
 
-			<if condition="#{#itemJson.get('po_line_amount') != null and !#itemJson.get('po_line_amount').isJsonNull() and T(com.unifier.core.utils.StringUtils).isNotBlank(#itemJson.get('po_line_amount').getAsString()) }">
-				<valueTag name="TotalPrice" value="#{new java.math.BigDecimal(#itemJson.get('po_line_amount').getAsString())}" />
-				<valueTag name="SellingPrice" value="#{new java.math.BigDecimal(#itemJson.get('po_line_amount').getAsString())}" />
-			</if>
-			<valueTag name="Discount" value="#{new java.math.BigDecimal(0)}" />
-
-			<valueTag name="FacilityCode" value="#{#store_code}" />
-
-
-			<endTag name="SaleOrderItem" />
+			<while condition="#{#counter gt 0}">
+				<invoke method="addSaleOrderItem" />
+				<var name="counter" value="#{#counter - 1}" />
+			</while>
 		</while>
-
-	</while>
 	<endTag name="SaleOrderItems" />
 
 	<endTag name="SaleOrder" />
