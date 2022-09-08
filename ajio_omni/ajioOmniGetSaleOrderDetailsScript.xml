@@ -139,7 +139,8 @@
 			<var name="poLineAmountBD" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#poLineAmount)}" />
 			<var name="poLineQuantityBD" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#orderLineQty)}" />
 			<var name="poLineAmountPerQty" value="#{#poLineAmountBD.divide(#poLineQuantityBD, 2, T(java.math.RoundingMode).HALF_EVEN)}" />
-
+			<log level="debug" value="#{#TAG} poLineAmount: #{#poLineAmount}, orderLineQty: #{#orderLineQty}, poLineAmountPerQty: #{#poLineAmountPerQty}" />
+			
 			<while condition="#{#counter gt 0}">
 				<invoke method="addSaleOrderItem" />
 				<var name="counter" value="#{#counter - 1}" />
