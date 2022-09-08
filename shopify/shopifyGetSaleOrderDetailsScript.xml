@@ -695,7 +695,7 @@
 			</if>
 			<log level="info" value="#{#TAG} SaleOrderTransaction : #{#saleOrderTransaction.toString()}, giftDiscount: #{#giftDiscount}, cashOnDelivery : #{#cashOnDelivery}" />
 		</while>
-
+		<log level="info" value="fetchPartiallyPaidOrders: #{#fetchPartiallyPaidOrders}, financialStatus: #{#financialStatus}, giftDiscountTransactionFound: #{#giftDiscountTransactionFound}, partiallyPaidTransactionFound: #{#partiallyPaidTransactionFound}" />
 		<if condition="#{#fetchPartiallyPaidOrders and 'partially_paid'.equalsIgnoreCase(#financialStatus) and !#giftDiscountTransactionFound and !#partiallyPaidTransactionFound}">
 			<log level="info" value="Skipping order #{#saleOrderCode} since no transaction found with gateway partially_paid or gift_card" />
 			<else>
