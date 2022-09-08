@@ -205,43 +205,51 @@
 							<var name="ucQty" value="#{#ucSoiItems.size()}" />
 							<log level="info" value="#{#TAG} For item id : #{#orderItemId} : ucQty is #{#ucQty} and ajioQty is #{#ajioQty}" />
 							<if condition="#{#ucQty gt #ajioQty}">
-								<var name="cancelledQty" value="#{#ucQty - #ajioQty}" />
-								<var name="cancelledQtyCopy" value="#{#ucQty - #ajioQty}" />
-								<log level="info" value="#{#TAG} cancelledQty for item id : #{#orderItemId} : #{#cancelledQty}" />
-								<var name="itemIndex" value="#{0}" />
-								<if condition="#{#ucSoiItems instanceof T(java.util.ArrayList)}">
-									<!-- Simple sku -->
-									<while condition="#{#itemIndex lt #cancelledQty and #cancelledQty gt 0}">
-										<var name="soiCode" value="#{#ucSoiItems.get(#itemIndex)}" />
+								<var name="qtyToCancelInUC" value="#{#ucQty - #ajioQty}" />
+								<var name="cancelledQtyCopy" value="#{#qtyToCancelInUC}" />
+								<log level="info" value="#{#TAG} qtyToCancelInUC for item id : #{#orderItemId} : #{#qtyToCancelInUC}" />
+								<var name="isSimpleSku" value="#{#ucSoiItems instanceof T(java.util.ArrayList)}" />
+								<if condition="#{#isSimpleSku}">
+									<var name="ucSoiCodes" value="#{#ucSoiItems}" />
+									<foreach collection="#{#ucSoiCodes}" var="soiCode">
+										<if condition="#{#cancelledSoiCodes.size() == #qtyToCancelInUC}" >
+											<break/>
+										</if>
 										<var name="soi" value="#{#shippingPackage.saleOrder.getSaleOrderItemByCode(#soiCode)}" />
 										<if condition="#{#soi.isCancellable()}">
-											<var value="#{#cancelledSoiCodes.add(#ucSoiItems.get(#itemIndex))}" />
-											<var name="cancelledQty" value="#{#cancelledQty - 1}" />
+											<var value="#{#cancelledSoiCodes.add(#soiCode)}" />
 											<else>
 												<log level="info" value="#{#TAG} Not adding soi in cancelledSoiCodes: #{#soiCode} , status: #{#soi.statusCode}" />
 											</else>
 										</if>
-										<var name="itemIndex" value="#{#itemIndex + 1}" />
-									</while>
+									</foreach>
+									<var name="requiredSoisFound" value="#{#cancelledSoiCodes.size() == #qtyToCancelInUC}" />
 									<else>
-										<!-- Bundle sku -->
-										<!-- ucSoiItems is a HashMap -->
-										<foreach collection="#{#ucSoiItems.entrySet()}" var="ucSoiItemsEntry">
-											<if condition="#{#cancelledQty == 0}">
+										<var name="bundleCodeToSoiCodes" value="#{#ucSoiItems}" />
+										<foreach collection="#{#bundleCodeToSoiCodes.entrySet()}" var="bundleCodeToSoiCodesEntry">
+											<if condition="#{#qtyToCancelInUC == 0}">
 												<break />
 											</if>
-											<foreach collection="#{#ucSoiItemsEntry.getValue()}" var="soiCode">
+											<var name="cancellableItemFoundInBundle" value="#{false}" />
+											<!-- Cancel all components of a bundle -->
+											<var name="bundleSoiCodes" value="#{#bundleCodeToSoiCodesEntry.getValue()}" />
+											<foreach collection="#{#bundleSoiCodes}" var="soiCode">
 												<var name="soi" value="#{#shippingPackage.saleOrder.getSaleOrderItemByCode(#soiCode)}" />
 												<if condition="#{#soi.isCancellable()}">
+													<var name="cancellableItemFoundInBundle" value="#{true}" />
 													<var value="#{#cancelledSoiCodes.add(#soiCode)}" />
-													<var name="cancelledQty" value="#{#cancelledQty - 1}" />
 												</if>
 											</foreach>
+											<if condition="#{#cancellableItemFoundInBundle}" >
+												<var name="qtyToCancelInUC" value="#{#qtyToCancelInUC - 1}" />
+											</if>
 										</foreach>
+										<var name="requiredSoisFound" value="#{#qtyToCancelInUC == 0}" />
 									</else>
 								</if>
-								<if condition="#{#cancelledQty gt 0}">
-									<log level="info" value="#{#TAG} Only #{#cancelledQtyCopy - #cancelledQty} sale order items found in cancellable state in UC" />
+
+								<if condition="#{!#requiredSoisFound}">
+									<log level="info" value="#{#TAG} Only #{#cancelledQtyCopy - #qtyToCancelInUC} sale order items found in cancellable state in UC" />
 								</if>
 								<else>
 									<log level="info" value="#{#TAG} No cancellation required in UC for item id : #{#orderItemId}" />
