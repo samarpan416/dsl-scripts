@@ -1,0 +1,511 @@
+<scraper name="ajioOmniSaleOrderStatusSyncScript" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.unicommerce.com/schema/scraper-1.0.xsd">
+
+	<var name="TAG" value="[ajioOmniSaleOrderStatusSyncScript]" />
+
+	<var name="uniwareDatePattern" value="yyyy-MM-dd'T'HH:mm:ss.SSSXXX" />
+	<var name="baseApiUrl" value="http://116.50.64.106:8080/unicommerce" />
+	<var name="authParamsMap" value="#{new java.util.HashMap()}" />
+	<invoke method="fetchAuthToken" script="ajioOmniUserVerificationScript">
+		<param name="source" value="#{#source}" />
+		<param name="authToken" value="#{#authToken}" />
+		<param name="authParamsMap" value="#{#authParamsMap}" />
+		<param name="username" value="#{#username}" />
+		<param name="password" value="#{#password}" />
+	</invoke>
+	<var name="authToken" value="#{#authParamsMap.get('authToken')}" />
+
+	<!-- Methods for cancellation sync -->
+
+	<method name="fetchB2CInvoiceDetails">
+		<var name="b2cInvoiceDetailsFound" value="#{false}" />
+		<var name="throttleLimit" value="#{5}" />
+		<var name="throttleCount" value="#{0}" />
+
+		<while condition="#{#throttleCount &lt; #throttleLimit}">
+			<http method="GET" url="#{#baseApiUrl}/orders/#{#saleOrderCode}/invoice/b2c" var="b2cInvoiceResponse" fetchStatusCode="true" timeout="160">
+				<header name="apiKey" value="#{#authToken}" />
+			</http>
+
+			<log level="info" value="#{#TAG} b2cInvoiceResponse: #{#b2cInvoiceResponse}" />
+			<var name="b2cInvoiceResponseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#b2cInvoiceResponse)}" />
+
+			<if condition="#{ #b2cInvoiceResponseResponseCode == 429 }">
+				<log level="info" value="#{#TAG} Request Throttled. Sleeping for 50 seconds" />
+				<var value="#{T(java.lang.Thread).sleep(50000)}" />
+				<var name="throttleCount" value="#{#throttleCount + 1}" />
+				<else>
+					<if condition="#{#b2cInvoiceResponseResponseCode == 200}">
+						<if condition="#{#b2cInvoiceResponseJson != null and !#b2cInvoiceResponseJson.isJsonNull() and #b2cInvoiceResponseJson.get('order_lines') != null and !#b2cInvoiceResponseJson.get('order_lines').isJsonNull()}">
+							<var name="b2cInvoiceDetailsFound" value="#{true}" />
+						</if>
+						<break />
+						<else>
+							<var name="errorMessage" value="#{#b2cInvoiceResponseJson.get('message')}" />
+							<var name="skipErrorMsg" value="Seller order which is involved in operation is marked as 'CANCELLED'" />
+							<if condition="#{#b2cInvoiceResponseResponseCode == 400 and #errorMessage != null and !#errorMessage.isJsonNull() and #errorMessage.getAsString().contains(#skipErrorMsg)}">
+								<var name="isOrderCancelled" value="#{true}" />
+								<log level="info" value="#{#TAG} Full order is cancelled" />
+								<break />
+								<else>
+									<!-- No need to throw error -->
+									<break />
+									<!-- <scriptError message="Getting status: #{#b2cInvoiceResponseResponseCode} from AJIO. Kindly connect with their team." /> -->
+								</else>
+							</if>
+						</else>
+					</if>
+					<break />
+				</else>
+			</if>
+		</while>
+
+		<log level="info" value="#{#TAG} b2cInvoiceDetailsFound : #{#b2cInvoiceDetailsFound} , isOrderCancelled : #{#isOrderCancelled}" />
+	</method>
+
+	<!-- PARAMS :   saleOrderCode
+                    authToken
+     -->
+	<method name="fetchOrderDetails">
+		<log level="info" value="#{#TAG} shippingPackageStatus : #{#shippingPackageStatus}" />
+		<var name="saleOrderDetailsFound" value="#{false}" />
+		<var name="throttleLimit" value="#{5}" />
+		<var name="throttleCount" value="#{0}" />
+
+		<while condition="#{#throttleCount &lt; #throttleLimit}">
+
+			<http method="GET" url="#{#baseApiUrl}/orders?orderIds=#{#saleOrderCode}" var="saleOrderResponse" fetchStatusCode="true" timeout="160">
+				<header name="apiKey" value="#{#authToken}" />
+			</http>
+
+			<log level="info" value="#{#TAG} saleOrderResponse: #{#saleOrderResponse}" />
+
+			<if condition="#{ #saleOrderResponseResponseCode >= 400 }">
+
+				<if condition="#{ !(#saleOrderResponseResponseCode eq 429) }">
+					<scriptError message="Getting status: #{#saleOrderResponseResponseCode} from AJIO. Kindly connect with their team." />
+
+					<else>
+						<log level="info" value="#{#TAG} Request Throttled. Sleeping for 50 seconds" />
+						<var value="#{T(java.lang.Thread).sleep(50000)}" />
+						<var name="throttleCount" value="#{#throttleCount + 1}" />
+					</else>
+				</if>
+
+				<else>
+					<var name="saleOrderResponseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#saleOrderResponse)}" />
+					<break />
+				</else>
+			</if>
+		</while>
+
+		<if condition="#{#saleOrderResponseJson != null and !#saleOrderResponseJson.isJsonNull() and #saleOrderResponseJson.get('orders') != null and !#saleOrderResponseJson.get('orders').isJsonNull()}">
+			<var name="saleOrderIterator" value="#{#saleOrderResponseJson.get('orders').getAsJsonArray().iterator()}" />
+			<while condition="#{#saleOrderIterator.hasNext()}">
+				<var name="saleOrderDetail" value="#{#saleOrderIterator.next()}" />
+				<if condition="#{#saleOrderCode.equals(T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderDetail, 'order_id'))}">
+					<var name="saleOrderDetailsFound" value="#{true}" />
+					<!-- <if condition="#{'PACKED'.equals(T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderDetail, 'status'))}"> 
+                        
+                    -->
+
+					<if condition="#{'CANCELLED'.equals(T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderDetail, 'status'))}">
+						<var name="isOrderCancelled" value="#{true}" />
+					</if>
+
+					<if condition="#{'PACKED'.equals(#shippingPackageStatus)}">
+						<invoke method="fetchB2CInvoiceDetails">
+							<param name="saleOrderCode" value="#{#saleOrderCode}" />
+							<param name="authToken" value="#{#authToken}" />
+						</invoke>
+					</if>
+					<if condition="#{#isOrderCancelled != null and #isOrderCancelled}">
+						<break />
+						<else>
+							<if condition="#{#b2cInvoiceDetailsFound}">
+								<var name="orderLines" value="#{#b2cInvoiceResponseJson.get('order_lines').getAsJsonArray()}" />
+								<else>
+									<var name="orderLines" value="#{#saleOrderDetail.get('order_lines').getAsJsonArray()}" />
+								</else>
+							</if>
+						</else>
+					</if>
+				</if>
+			</while>
+		</if>
+		<log level="info" value="#{#TAG} saleOrderDetailsFound : #{#saleOrderDetailsFound}" />
+		<if condition="#{!#saleOrderDetailsFound and #responseMap != null}">
+			<scriptError message="Error fetching order details from AJIO. Please try after some time" />
+		</if>
+	</method>
+
+	<!-- PARAMS :   saleOrderItems
+                    responseMap (optional)
+     -->
+	<method name="prepareChannelSoiCodeToSoiItems">
+		<!-- String <-> ArrayList -->
+		<var name="channelSoiCodeToSoiItems" value="#{new java.util.HashMap()}" />
+		<foreach collection="#{#saleOrderItems}" var="saleOrderItem">
+			<var name="soiItems" value="#{#channelSoiCodeToSoiItems.get(#saleOrderItem.channelSaleOrderItemCode)}" />
+			<var name="isBundleItem" value="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#saleOrderItem.combinationIdentifier)}" />
+			<if condition="#{#soiItems == null}">
+				<if condition="#{#isBundleItem}">
+					<var name="soiItems" value="#{new java.util.HashMap()}" />
+					<else>
+						<var name="soiItems" value="#{new java.util.ArrayList()}" />
+					</else>
+				</if>
+				<var value="#{#channelSoiCodeToSoiItems.put(#saleOrderItem.channelSaleOrderItemCode, #soiItems)}" />
+			</if>
+			<if condition="#{#isBundleItem}">
+				<if condition="#{#soiItems.get(#saleOrderItem.combinationIdentifier) == null}">
+					<var value="#{#soiItems.put(#saleOrderItem.combinationIdentifier , new java.util.ArrayList())}" />
+				</if>
+				<var value="#{#soiItems.get(#saleOrderItem.combinationIdentifier).add(#saleOrderItem.code)}" />
+				<else>
+					<var value="#{#soiItems.add(#saleOrderItem.code)}" />
+				</else>
+			</if>
+		</foreach>
+		<if condition="#{#responseMap != null}">
+			<var value="#{#responseMap.put('channelSoiCodeToSoiItems', #channelSoiCodeToSoiItems)}" />
+		</if>
+	</method>
+
+	<!-- PARAMS :   saleOrderCode
+                    saleOrderItems
+                    shippingPackageStatus
+                    responseMap (Optional)
+    -->
+	<method name="getCancelledSoiCodes">
+		<invoke method="fetchOrderDetails">
+			<param name="saleOrderCode" value="#{#saleOrderCode}" />
+		</invoke>
+		<if condition="#{#isOrderCancelled != null and #isOrderCancelled}">
+			<log level="info" value="#{#TAG} Adding all cancellable item codes in cancelledSoiCodes" />
+			<var name="cancelledSoiCodes" value="#{new java.util.ArrayList()}" />
+			<foreach collection="#{#saleOrderItems}" var="saleOrderItem">
+				<if condition="#{#saleOrderItem.isCancellable()}">
+					<var value="#{#cancelledSoiCodes.add(#saleOrderItem.code)}" />
+				</if>
+			</foreach>
+			<else>
+				<if condition="#{#saleOrderDetailsFound}">
+					<var name="cancelledSoiCodes" value="#{new java.util.ArrayList()}" />
+					<invoke method="prepareChannelSoiCodeToSoiItems">
+						<param name="saleOrderItems" value="#{#saleOrderItems}" />
+					</invoke>
+					<var name="orderLinesItr" value="#{#orderLines.iterator()}" />
+					<while condition="#{#orderLinesItr.hasNext()}">
+						<var name="orderLine" value="#{#orderLinesItr.next()}" />
+						<var name="orderItemId" value="#{#orderLine.get('order_item_id').getAsString()}" />
+						<var name="ajioQty" value="#{#orderLine.get('quantity').getAsInt()}" />
+						<log level="info" value="#{#TAG} Quantity on Ajio for item id : #{#orderItemId} is #{#ajioQty}" />
+						<var name="ucSoiItems" value="#{#channelSoiCodeToSoiItems.get(#orderItemId)}" />
+						<if condition="#{#ucSoiItems != null}">
+							<var name="ucQty" value="#{#ucSoiItems.size()}" />
+							<log level="info" value="#{#TAG} For item id : #{#orderItemId} : ucQty is #{#ucQty} and ajioQty is #{#ajioQty}" />
+							<if condition="#{#ucQty gt #ajioQty}">
+								<var name="qtyToCancelInUC" value="#{#ucQty - #ajioQty}" />
+								<var name="cancelledQtyCopy" value="#{#qtyToCancelInUC}" />
+								<log level="info" value="#{#TAG} qtyToCancelInUC for item id : #{#orderItemId} : #{#qtyToCancelInUC}" />
+								<var name="isSimpleSku" value="#{#ucSoiItems instanceof T(java.util.ArrayList)}" />
+								<if condition="#{#isSimpleSku}">
+									<var name="ucSoiCodes" value="#{#ucSoiItems}" />
+									<foreach collection="#{#ucSoiCodes}" var="soiCode">
+										<if condition="#{#cancelledSoiCodes.size() == #qtyToCancelInUC}" >
+											<break/>
+										</if>
+										<var name="soi" value="#{#shippingPackage.saleOrder.getSaleOrderItemByCode(#soiCode)}" />
+										<if condition="#{#soi.isCancellable()}">
+											<var value="#{#cancelledSoiCodes.add(#soiCode)}" />
+											<else>
+												<log level="info" value="#{#TAG} Not adding soi in cancelledSoiCodes: #{#soiCode} , status: #{#soi.statusCode}" />
+											</else>
+										</if>
+									</foreach>
+									<var name="requiredSoisFound" value="#{#cancelledSoiCodes.size() == #qtyToCancelInUC}" />
+									<else>
+										<var name="bundleCodeToSoiCodes" value="#{#ucSoiItems}" />
+										<foreach collection="#{#bundleCodeToSoiCodes.entrySet()}" var="bundleCodeToSoiCodesEntry">
+											<if condition="#{#qtyToCancelInUC == 0}">
+												<break />
+											</if>
+											<var name="cancellableItemFoundInBundle" value="#{false}" />
+											<!-- Cancel all components of a bundle -->
+											<var name="bundleSoiCodes" value="#{#bundleCodeToSoiCodesEntry.getValue()}" />
+											<foreach collection="#{#bundleSoiCodes}" var="soiCode">
+												<var name="soi" value="#{#shippingPackage.saleOrder.getSaleOrderItemByCode(#soiCode)}" />
+												<if condition="#{#soi.isCancellable()}">
+													<var name="cancellableItemFoundInBundle" value="#{true}" />
+													<var value="#{#cancelledSoiCodes.add(#soiCode)}" />
+												</if>
+											</foreach>
+											<if condition="#{#cancellableItemFoundInBundle}" >
+												<var name="qtyToCancelInUC" value="#{#qtyToCancelInUC - 1}" />
+											</if>
+										</foreach>
+										<var name="requiredSoisFound" value="#{#qtyToCancelInUC == 0}" />
+									</else>
+								</if>
+
+								<if condition="#{!#requiredSoisFound}">
+									<log level="info" value="#{#TAG} Only #{#cancelledQtyCopy - #qtyToCancelInUC} sale order items found in cancellable state in UC" />
+								</if>
+								<else>
+									<log level="info" value="#{#TAG} No cancellation required in UC for item id : #{#orderItemId}" />
+								</else>
+							</if>
+							<else>
+								<log level="info" value="#{#TAG} Item id : #{#orderItemId} not present in channelSoiCodeToSoiItems" />
+							</else>
+						</if>
+					</while>
+					<log level="info" value="#{#TAG} cancelledSoiCodes : #{#cancelledSoiCodes.toString()}" />
+					<else>
+						<log level="info" value="#{#TAG} Sale order details not found at Ajio. Please connect with Ajio team" />
+					</else>
+				</if>
+			</else>
+		</if>
+		<if condition="#{#responseMap != null}">
+			<var value="#{#responseMap.put('cancelledSoiCodes' , #cancelledSoiCodes)}" />
+		</if>
+	</method>
+
+	<!-- Methods for return sync -->
+
+	<method name="markReturnStatus">
+		<log level="info" value="#{#TAG} markReturnStatus()" />
+		<!-- Map consisting of relation between soi combination identifier and list of SOIs which are returnable. -->
+		<var name="bundleMap" value="#{new java.util.HashMap()}" />
+		<!-- Set of all the combination identifiers of SOIs that can be or are already returned. -->
+		<var name="returnedCombinationIdentifiers" value="#{new java.util.HashSet()}" />
+		<!-- List of all simple SOIs that are returnable. -->
+		<var name="returnableItems" value="#{new java.util.ArrayList()}" />
+		<!-- Count of SOIs that have already been returned. -->
+		<var name="returnedQuantity" value="#{0}" />
+		<foreach collection="#{#targettedItemSet}" var="returnedSOI">
+			<var value="#{T(com.unifier.services.utils.EntitySourceReferenceUtils).updateEntityReference(#channel,#returnedSOI,#returnOrderItemId+','+#returnOrderId)}" />
+			<if condition="#{#returnedSOI.isReversePickable()}">
+				<if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#returnedSOI.combinationIdentifier)}">
+					<var value="#{#returnedCombinationIdentifiers.add(#returnedSOI.combinationIdentifier)}" />
+
+					<var name="identifierBundleList" value="#{#bundleMap.get(#returnedSOI.combinationIdentifier)}" />
+					<if condition="#{T(com.unifier.core.utils.CollectionUtils).isEmpty(#identifierBundleList)}">
+						<var name="identifierBundleList" value="#{new java.util.ArrayList()}" />
+					</if>
+					<var value="#{#identifierBundleList.add(#returnedSOI)}" />
+					<var value="#{#bundleMap.put(#returnedSOI.combinationIdentifier, #identifierBundleList)}" />
+
+					<else>
+						<var value="#{#returnableItems.add(#returnedSOI)}" />
+					</else>
+				</if>
+
+				<else>
+					<if condition="#{(#statusToMark.equals('RETURN_EXPECTED') and T(com.unifier.core.utils.StringUtils).equalsAny(#returnedSOI.shippingPackage.statusCode, 'RETURN_EXPECTED', 'RETURNED')) or (#statusToMark.equals('COURIER_RETURN') and !T(com.unifier.core.utils.StringUtils).equalsAny(#returnedSOI.shippingPackage.statusCode, 'RETURN_EXPECTED', 'RETURNED'))}">
+						<if condition="#{T(com.unifier.core.utils.StringUtils).isBlank(#returnedSOI.combinationIdentifier)}">
+							<var name="returnedQuantity" value="#{#returnedQuantity + 1}" />
+							<else>
+								<if condition="#{!#returnedCombinationIdentifiers.contains(#returnedSOI.combinationIdentifier)}">
+									<var value="#{#returnedCombinationIdentifiers.add(#returnedSOI.combinationIdentifier)}" />
+									<var name="returnedQuantity" value="#{#returnedQuantity + 1}" />
+								</if>
+							</else>
+						</if>
+					</if>
+				</else>
+			</if>
+
+		</foreach>
+
+		<log level="info" value="#{#TAG} bundleMap: #{#bundleMap.toString()}" />
+		<log level="info" value="#{#TAG} returnedCombinationIdentifiers: #{#returnedCombinationIdentifiers.toString()}" />
+		<log level="info" value="#{#TAG} returnableItems: #{#returnableItems.toString()}" />
+		<log level="info" value="#{#TAG} returnedQuantity: #{#returnedQuantity.toString()}" />
+
+		<var name="requiredCountToReturn" value="#{#totalReturnableQuantity - #returnedQuantity}" />
+
+		<log level="info" value="#{#TAG} requiredCountToReturn: #{#requiredCountToReturn.toString()}" />
+
+		<if condition="#{#requiredCountToReturn &gt; 0}">
+
+			<!-- Simple Items -->
+			<if condition="#{T(org.apache.commons.collections.MapUtils).isEmpty(#bundleMap) and T(com.unifier.core.utils.CollectionUtils).isEmpty(#returnedCombinationIdentifiers)}">
+				<if condition="#{#returnableItems.size() ge #requiredCountToReturn}">
+					<var name="itemsIterator" value="#{T(com.unifier.core.utils.CollectionUtils).sublistIterator(#returnableItems, #requiredCountToReturn)}" />
+					<while condition="#{#itemsIterator.hasNext()}">
+						<var name="itemJson" value="#{#itemsIterator.next()}" />
+						<foreach collection="#{#itemJson}" var="soi">
+							<startTag name="SaleOrderItem" />
+							<valueTag name="Code" value="#{#soi.code}" />
+							<valueTag name="StatusCode" value="#{#statusToMark}" />
+							<if condition="#{ #returnOrderElement.get('tracking_number') != null and !#returnOrderElement.get('tracking_number').isJsonNull() }">
+								<valueTag name="ReturnTrackingNumber" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#returnOrderElement, 'tracking_number')}" cdata="true" />
+								<valueTag name="ShippingProviderCode" value="SELF" />
+							</if>
+							<if condition="#{ #returnOrderElement.get('return_date') != null and !#returnOrderElement.get('return_date').isJsonNull() }">
+								<var name="returnDateTime" value="#{#returnOrderElement.get('return_date').getAsLong() * 1000}" />
+								<var name="displayReturnDateTime" value="#{new java.util.Date(#returnDateTime)}" />
+								<valueTag name="ReturnDate" value="#{T(com.unifier.core.utils.DateUtils).dateToString(#displayReturnDateTime, #uniwareDatePattern)}" cdata="true" />
+							</if>
+							<endTag name="SaleOrderItem" />
+						</foreach>
+					</while>
+				</if>
+
+				<!-- Bundled Items -->
+				<else>
+					<if condition="#{#bundleMap.size() ge #requiredCountToReturn}">
+						<foreach collection="#{#bundleMap}" var="bundleMapEntry" varstatus="bundleMapCounter">
+							<if condition="#{#bundleMapCounter &gt; #requiredCountToReturn}">
+								<break />
+								<else>
+									<foreach collection="#{#bundleMapEntry.getValue()}" var="sois">
+										<startTag name="SaleOrderItem" />
+										<valueTag name="Code" value="#{#sois.code}" />
+										<valueTag name="StatusCode" value="#{#statusToMark}" />
+										<if condition="#{ #returnOrderElement.get('tracking_number') != null and !#returnOrderElement.get('tracking_number').isJsonNull() }">
+											<valueTag name="ReturnTrackingNumber" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#returnOrderElement, 'tracking_number')}" cdata="true" />
+											<valueTag name="ShippingProviderCode" value="SELF" />
+										</if>
+										<if condition="#{ #returnOrderElement.get('return_date') != null and !#returnOrderElement.get('return_date').isJsonNull() }">
+											<var name="returnDateTime" value="#{#returnOrderElement.get('return_date').getAsLong() * 1000}" />
+											<var name="displayReturnDateTime" value="#{new java.util.Date(#returnDateTime)}" />
+											<valueTag name="ReturnDate" value="#{T(com.unifier.core.utils.DateUtils).dateToString(#displayReturnDateTime, #uniwareDatePattern)}" cdata="true" />
+										</if>
+										<endTag name="SaleOrderItem" />
+									</foreach>
+								</else>
+							</if>
+						</foreach>
+					</if>
+				</else>
+			</if>
+
+		</if>
+
+	</method>
+
+	<method name="fetchReturns">
+		<log level="info" value="#{#TAG} Fetching returns for order: #{#saleOrder.code}" />
+
+		<var name="MAX_RETRIES" value="#{5}" />
+		<var name="retryCount" value="#{0}" />
+
+		<while condition="#{#retryCount lt #MAX_RETRIES}">
+			<http method="GET" url="#{#baseApiUrl}/return?orderIds=#{#saleOrder.code}" var="fetchReturnsResponse" fetchStatusCode="true">
+				<header name="apiKey" value="#{#authToken}" />
+			</http>
+
+			<log level="info" value="#{#TAG} fetchReturnsResponse : #{#fetchReturnsResponse}" />
+
+			<if condition="#{ #fetchReturnsResponseResponseCode >= 400 }">
+
+				<if condition="#{ !(#fetchReturnsResponseResponseCode eq 429) }">
+					<scriptError message="Getting status: #{#fetchReturnsResponseResponseCode} from AJIO. Kindly connect with their team." />
+
+					<else>
+						<log level="info" value="#{#TAG} Request Throttled. Sleeping for 50 seconds" />
+						<var value="#{T(java.lang.Thread).sleep(50000)}" />
+						<var name="throttleCount" value="#{#throttleCount + 1}" />
+					</else>
+				</if>
+
+				<else>
+					<var name="fetchReturnsResponseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#fetchReturnsResponse)}" />
+					<break />
+				</else>
+			</if>
+		</while>
+	</method>
+
+	<invoke method="fetchReturns" />
+
+	<var name="shippingPackagesItr" value="#{#saleOrder.shippingPackages.iterator()}" />
+	<if condition="#{#shippingPackagesItr.hasNext()}">
+		<var name="shippingPackage" value="#{#shippingPackagesItr.next()}" />
+		<var name="shippingPackageStatus" value="#{#shippingPackage.statusCode}" />
+	</if>
+	<log level="info" value="#{#TAG} shippingPackageCode : #{#shippingPackage?.code} , shippingPackageStatus : #{#shippingPackageStatus}" />
+
+	<!-- Before accepting/verifying order in UC there will be no ShippingPackage -->
+	<if condition="#{#shippingPackage != null}">
+		<!-- Move getCancelledSoiCodes method (and it's dependencies) from ajioOmniInvoiceScript to this script  -->
+		<invoke method="getCancelledSoiCodes">
+			<param name="saleOrderCode" value="#{#saleOrder.code}" />
+			<param name="saleOrderItems" value="#{#shippingPackage.saleOrderItems}" />
+			<param name="baseApiUrl" value="#{#baseApiUrl}" />
+			<param name="authToken" value="#{#authToken}" />
+			<param name="shippingPackageStatus" value="#{#shippingPackageStatus}" />
+		</invoke>
+
+		<else>
+			<log level="info" value="#{#TAG} Not syncing cancellations for #{#saleOrder.code} since there's no shipping package" />
+		</else>
+	</if>
+
+	<startTag name="SaleOrder" />
+	<startTag name="SaleOrderItems" />
+	<if condition="#{#fetchReturnsResponseJson != null and !#fetchReturnsResponseJson.isJsonNull() and #fetchReturnsResponseJson.get('orders') != null and !#fetchReturnsResponseJson.get('orders').isJsonNull()}">
+		<var name="returnOrderIterator" value="#{#fetchReturnsResponseJson.get('orders').getAsJsonArray().iterator()}" />
+		<if condition="#{#returnOrderIterator.hasNext()}">
+			<var name="returnOrderElement" value="#{#returnOrderIterator.next()}" />
+			<var name="returnStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#returnOrderElement, 'return_status')}" />
+			<var name="returnType" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#returnOrderElement, 'return_type')}" />
+
+			<if condition="#{T(com.unifier.core.utils.StringUtils).equalsIngoreCaseAny(#returnStatus, 'RETURN_DELIVERED', 'RETURN_PROCESSED', 'RETURN_CREATED')}">
+				<!-- Storing ReturnOrderID using EntitySourceReferenceUtils -->
+				<var name="returnOrderId" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#returnOrderElement, 'return_order_id')}" />
+				<!-- <var value="#{T(com.unifier.services.utils.EntitySourceReferenceUtils).updateEntityReference(#channel,#saleOrder,#returnOrderId)}" /> -->
+				<var name="returnItemIterator" value="#{#returnOrderElement.get('return_order_items').getAsJsonArray().iterator()}" />
+				<while condition="#{#returnItemIterator.hasNext()}">
+					<var name="returnItemElement" value="#{#returnItemIterator.next()}" />
+					<var name="itemCode" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#returnItemElement, 'order_item_id')}" />
+					<var name="returnableQuantity" value="#{#returnItemElement.get('return_quantity').getAsInt()}" />
+					<var name="returnOrderItemId" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#returnItemElement, 'return_item_id')}" />
+					<var name="targettedItemSet" value="#{#saleOrder.getSaleOrderItems().?[channelSaleOrderItemCode.equals(#itemCode)]}" />
+
+					<if condition="#{#returnType.equals('CIR') or #returnType.equals('RVP')}">
+						<invoke method="markReturnStatus">
+							<param name="totalReturnableQuantity" value="#{#returnableQuantity}" />
+							<param name="returnOrderItemId" value="#{#returnOrderItemId}" />
+							<param name="statusToMark" value="RETURN_EXPECTED" />
+						</invoke>
+					</if>
+
+					<if condition="#{#returnType.equals('RTO')}">
+						<invoke method="markReturnStatus">
+							<param name="totalReturnableQuantity" value="#{#returnableQuantity}" />
+							<param name="returnOrderItemId" value="#{#returnOrderItemId}" />
+							<param name="statusToMark" value="COURIER_RETURN" />
+						</invoke>
+					</if>
+
+				</while>
+
+				<else>
+					<log level="info" value="#{#TAG} Uniware only processes returns in RETURN_DELIVERED and RETURN_PROCESSED state." />
+				</else>
+			</if>
+
+			<else>
+				<log level="info" value="#{#TAG} Returns not found for order: #{#saleOrder.code}" />
+			</else>
+
+		</if>
+
+	</if>
+
+	<if condition="#{#cancelledSoiCodes != null}">
+		<foreach collection="#{#cancelledSoiCodes}" var="cancelledSoiCode">
+			<startTag name="SaleOrderItem" />
+			<valueTag name="Code" value="#{#cancelledSoiCode}" />
+			<valueTag name="StatusCode" value="CANCELLED" />
+			<endTag name="SaleOrderItem" />
+		</foreach>
+	</if>
+	<endTag name="SaleOrderItems" />
+	<endTag name="SaleOrder" />
+
+</scraper>

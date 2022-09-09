@@ -1,0 +1,605 @@
+<scraper name="ajioOmniShippingProviderAllocationScript" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.unicommerce.com/schema/scraper-1.0.xsd">
+
+	<var name="TAG" value="[ajioOmniShippingProviderAllocationScript]" />
+
+	<var name="baseApiUrl" value="http://116.50.64.106:8080/unicommerce" />
+	<var name="authParamsMap" value="#{new java.util.HashMap()}" />
+	<invoke method="fetchAuthToken" script="ajioOmniUserVerificationScript">
+		<param name="source" value="#{#source}" />
+		<param name="authToken" value="#{#authToken}" />
+		<param name="authParamsMap" value="#{#authParamsMap}" />
+		<param name="username" value="#{#username}" />
+		<param name="password" value="#{#password}" />
+	</invoke>
+	<var name="authToken" value="#{#authParamsMap.get('authToken')}" />
+
+	<!-- 
+        0.  Make a SOAP call to UC to get invoice
+        1.  Upload UC invoice to AJIO
+        2.  Get B2C invoice from AJIO
+        3.  Generate Shipping Label Data from AJIO
+        4.  Generate Shipping Label Pdf from AJIO
+        5.  Merge invoice and label files
+        6.  Store the merged file url as ShippingLabelLink
+    -->
+
+	<method name="updatePONumber">
+		<var name="purchaseOrderNumber" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderDetail, 'po_number')}" />
+		<var name="saleOrder" value="#{#shippingPackage.saleOrder}" />
+		<var value="#{#saleOrder.setDisplayOrderCode(#purchaseOrderNumber)}" />
+		<log level="info" value="#{#TAG} displayOrderCode: #{#saleOrder.displayOrderCode}" />
+		<var name="saleOrderService" value="#{#applicationContext.getBean('saleOrderService')}" />
+		<var value="#{#saleOrderService.updateSaleOrder(#saleOrder)}" />
+	</method>
+
+	<method name="fetchOrderDetails">
+		<var name="throttleLimit" value="#{5}" />
+		<var name="throttleCount" value="#{0}" />
+
+		<while condition="#{#throttleCount &lt; #throttleLimit}">
+
+			<http method="GET" url="#{#baseApiUrl}/orders?orderIds=#{#shippingPackage.saleOrder.code}" var="saleOrderResponse" fetchStatusCode="true">
+				<header name="apiKey" value="#{#authToken}" />
+			</http>
+
+			<log level="info" value="#{#TAG} saleOrderResponse: #{#saleOrderResponse}" />
+
+			<if condition="#{ #saleOrderResponseResponseCode >= 400 }">
+
+				<if condition="#{ !(#saleOrderResponseResponseCode eq 429) }">
+					<scriptError message="Getting status: #{#saleOrderResponseResponseCode} from AJIO. Kindly connect with their team." />
+
+					<else>
+						<log level="info" value="#{#TAG} Request Throttled. Sleeping for 50 seconds" />
+						<var value="#{T(java.lang.Thread).sleep(50000)}" />
+						<var name="throttleCount" value="#{#throttleCount + 1}" />
+					</else>
+				</if>
+
+				<else>
+					<var name="saleOrderResponseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#saleOrderResponse)}" />
+					<break />
+				</else>
+			</if>
+		</while>
+
+		<if condition="#{#saleOrderResponseJson != null and !#saleOrderResponseJson.isJsonNull() and #saleOrderResponseJson.get('orders') != null and !#saleOrderResponseJson.get('orders').isJsonNull()}">
+			<var name="saleOrderIterator" value="#{#saleOrderResponseJson.get('orders').getAsJsonArray().iterator()}" />
+			<while condition="#{#saleOrderIterator.hasNext()}">
+				<var name="saleOrderDetail" value="#{#saleOrderIterator.next()}" />
+				<if condition="#{#shippingPackage.saleOrder.code.equals(T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderDetail, 'order_id'))}">
+					<var name="saleOrderDetailsFound" value="#{true}" />
+					<break />
+				</if>
+			</while>
+		</if>
+
+	</method>
+
+	<method name="generateB2BInvoice">
+		<var name="channelSaleOrderItemCodeToItemDetailsMap" value="#{new java.util.HashMap()}" />
+		<var name="combinationIdentifierSet" value="#{new java.util.HashSet()}" />
+		<foreach collection="#{#shippingPackage.saleOrderItems}" var="saleOrderItem">
+			<var name="itemDetailsMap" value="#{#channelSaleOrderItemCodeToItemDetailsMap.get(#saleOrderItem.channelSaleOrderItemCode)}" />
+			<if condition="#{T(com.unifier.core.utils.CollectionUtils).isEmpty(#itemDetailsMap)}">
+				<var name="itemDetailsMap" value="#{new java.util.HashMap()}" />
+				<var value="#{#itemDetailsMap.put('order_item_id', #saleOrderItem.channelSaleOrderItemCode)}" />
+				<var value="#{#itemDetailsMap.put('quantity', 0)}" />
+				<var value="#{#channelSaleOrderItemCodeToItemDetailsMap.put(#saleOrderItem.channelSaleOrderItemCode, #itemDetailsMap)}" />
+			</if>
+
+			<if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#saleOrderItem.combinationIdentifier)}">
+
+				<if condition="#{!#combinationIdentifierSet.contains(#saleOrderItem.combinationIdentifier)}">
+					<var value="#{#itemDetailsMap.put('quantity', #itemDetailsMap.get('quantity') + 1)}" />
+					<var value="#{#combinationIdentifierSet.add(#saleOrderItem.combinationIdentifier)}" />
+				</if>
+
+				<else>
+					<var value="#{#itemDetailsMap.put('quantity', #itemDetailsMap.get('quantity') + 1)}" />
+				</else>
+
+			</if>
+			<log level="info" value="itemDetailsMap: #{#itemDetailsMap.toString()}" />
+		</foreach>
+
+		<var name="itemsArray" value="#{new java.util.ArrayList()}" />
+		<foreach collection="#{#channelSaleOrderItemCodeToItemDetailsMap}" var="channelSaleOrderItemCodeToItemDetailsMapEntry">
+			<var value="#{#itemsArray.add(#channelSaleOrderItemCodeToItemDetailsMapEntry.getValue())}" />
+		</foreach>
+
+		<var name="requestMap" value="#{new java.util.HashMap()}" />
+		<var value="#{#requestMap.put('order_id', #shippingPackage.saleOrder.code)}" />
+		<var value="#{#requestMap.put('b2b_invoice_number', #shippingPackage.invoice.displayCode.replaceAll('_', '-'))}" />
+		<var value="#{#requestMap.put('pdf_required', true)}" />
+		<var name="orderLines" value="#{new java.util.HashMap()}" />
+		<var value="#{#requestMap.put('order_lines' , #itemsArray)}" />
+
+		<var name="generateB2BInvoiceRequestJson" value="#{T(com.unifier.core.utils.JsonUtils).objectToString(#requestMap)}" />
+
+		<log level="info" value="#{#TAG} generateB2BInvoiceRequestJson : #{#generateB2BInvoiceRequestJson}" />
+
+		<var name="throttleLimit" value="#{5}" />
+		<var name="throttleCount" value="#{0}" />
+
+		<while condition="#{#throttleCount &lt; #throttleLimit}">
+
+			<http method="POST" url="#{#baseApiUrl}/orders/#{#orderId}/invoice/b2b" var="generateB2BInvoiceResponse" fetchStatusCode="true">
+				<header name="Content-Type" value="application/json" />
+				<header name="apiKey" value="#{#authToken}" />
+				<body>#{#generateB2BInvoiceRequestJson}</body>
+			</http>
+
+			<log level="info" value="#{#TAG} generateB2BInvoiceResponse : #{#generateB2BInvoiceResponse}" />
+
+			<if condition="#{ #generateB2BInvoiceResponseResponseCode >= 400 }">
+
+				<if condition="#{ !(#generateB2BInvoiceResponseResponseCode eq 429) }">
+					<!-- TODO: Handle cancellation error here -->
+					<scriptError message="Getting status: #{#generateB2BInvoiceResponseResponseCode} from AJIO. Kindly connect with their team." />
+
+					<else>
+						<log level="info" value="#{#TAG} Request Throttled. Sleeping for 50 seconds" />
+						<var value="#{T(java.lang.Thread).sleep(50000)}" />
+						<var name="throttleCount" value="#{#throttleCount + 1}" />
+					</else>
+				</if>
+
+				<else>
+					<log level="info" value="#{#TAG} B2B invoice generated successfully" />
+					<break />
+				</else>
+			</if>
+
+		</while>
+
+	</method>
+
+	<method name="getSoapCredentials">
+		<var name="facility" value="#{#shippingPackage.facility.code}" />
+		<try>
+			<var name="tenantCode" value="#{T(com.uniware.core.utils.UserContext).current().tenant.code}" />
+			<log level="info" value="#{#TAG} tenantCode : #{#tenantCode}" />
+			<var name="tenantProfileService" value="#{#applicationContext.getBean('tenantProfileService')}" />
+			<var name="tenantProfile" value="#{#tenantProfileService.getTenantProfileByCode(#tenantCode)}" />
+			<var name="soapAccessUrl" value="https://#{#tenantProfile.accessUrl}:443/services/soap/?version=1.9&amp;facility=#{#facility}" />
+			<var name="soapApiUsername" value="#{#tenantProfile.apiUsername}" />
+			<var name="soapApiPassword" value="#{#tenantProfile.apiPassword}" />
+			<catch>
+				<scriptError message="Unable to get SOAP Api credentials, please connect AppEng Team" />
+			</catch>
+		</try>
+		<log level="info" value="#{#TAG} soapAccessUrl : #{#soapAccessUrl} , soapApiUserName : #{#soapApiUsername} , soapApiPassword : #{#soapApiPassword}" />
+	</method>
+
+	<method name="getUCInvoiceLabel">
+
+		<invoke method="getSoapCredentials" />
+
+		<var name="getInvoiceLabelRequestXML">
+			<![CDATA[
+                <soapenv:Envelope xmlns:ser="http://uniware.unicommerce.com/services/" xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+                    <soapenv:Header>
+                        <wsse:Security soapenv:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
+                            <wsse:UsernameToken wsu:Id="UsernameToken-1">
+                                <wsse:Username>#{T(org.apache.commons.lang.StringEscapeUtils).escapeXml(#soapApiUsername)}</wsse:Username>
+                                <wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">#{T(org.apache.commons.lang.StringEscapeUtils).escapeXml(#soapApiPassword)}</wsse:Password>
+                                <wsse:Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">nvPjKUgjKSIcKYcsJdiVSg==</wsse:Nonce>
+                                <wsu:Created>2020-11-19T03:55:42.802Z</wsu:Created>
+                            </wsse:UsernameToken>
+                        </wsse:Security>
+                    </soapenv:Header>
+                    <soapenv:Body>
+                        <GetInvoiceLabelRequest xmlns="http://uniware.unicommerce.com/services/">
+                            <ShippingPackageCode>#{T(org.apache.commons.lang.StringEscapeUtils).escapeXml(#shippingPackage.code)}</ShippingPackageCode>
+                        </GetInvoiceLabelRequest>
+                    </soapenv:Body>
+                </soapenv:Envelope>
+            ]]>
+		</var>
+
+		<log level="info" value="#{#TAG} getInvoiceLabelRequestXML: #{#getInvoiceLabelRequestXML}" />
+
+		<http url="#{#soapAccessUrl}" method="POST" var="getInvoiceLabelResponse" parseAsXml="false">
+			<body>#{#getInvoiceLabelRequestXML}</body>
+		</http>
+
+		<log level="info" value="#{#TAG} getInvoiceLabelResponse : #{#getInvoiceLabelResponse}" />
+
+		<var name="getInvoiceLabelResponseXML" value="#{T(com.unifier.core.utils.XMLParser).parse(#getInvoiceLabelResponse)}" />
+		<var name="isSuccessful" value="#{#getInvoiceLabelResponseXML.text('SOAP-ENV:Body/GetInvoiceLabelResponse/Successful')}" />
+		<log level="info" value="#{#TAG} Is GetInvoiceLabelRequest Successful : #{#isSuccessful}" />
+
+		<if condition="#{'TRUE'.equalsIgnoreCase(#isSuccessful)}">
+			<var name="base64InvoiceString" value="#{#getInvoiceLabelResponseXML.text('SOAP-ENV:Body/GetInvoiceLabelResponse/Label')}" />
+			<if condition="#{#base64InvoiceString != null}">
+				<log level="debug" value="#{#TAG} base64InvoiceString : #{#base64InvoiceString}" />
+
+				<var name="ucInvoiceFileName" value="#{T(com.unifier.core.utils.EncryptionUtils).md5Encode(T(com.unifier.core.utils.DateUtils).getCurrentTime().getTime() + '_' + T(com.uniware.core.utils.UserContext).current().tenant.code + '_' + #fileIdentifier + '_UCInvoice')}.pdf" />
+				<var name="ucInvoiceFilePath" value="#{'shippingLabel/' + #ucInvoiceFileName}" />
+				<var name="absoluteUCInvoiceFilePath" value="#{T(com.unifier.core.utils.FileUtils).normalizeFilePath(T(com.unifier.core.cache.CacheManager).getInstance().getCache('environmentCache').exportDirectoryPath, #ucInvoiceFilePath)}" />
+				<log level="info" value="#{#TAG} UC Invoice Path: #{#absoluteUCInvoiceFilePath}" />
+				<var value="#{T(com.unifier.core.utils.EncryptionUtils).base64DecodeToFile(#base64InvoiceString, #absoluteUCInvoiceFilePath)}" />
+				<else>
+					<scriptError message="Label field in GetInvoiceLabelResponse is empty" />
+				</else>
+			</if>
+			<else>
+				<scriptError message="GetInvoiceLabelRequest failed" />
+			</else>
+		</if>
+	</method>
+
+	<method name="uploadUCInvoiceToAjio">
+
+		<var name="throttleLimit" value="#{5}" />
+		<var name="throttleCount" value="#{0}" />
+
+		<while condition="#{#throttleCount &lt; #throttleLimit}">
+			<http method="POST" url="#{#baseApiUrl}/orders/#{#orderId}/invoice/b2b/file" var="uploadB2BInvoiceResponse" fetchStatusCode="true" multipart="true">
+				<header name="apiKey" value="#{#authToken}" />
+				<file name="file" value="#{#absoluteUCInvoiceFilePath}" />
+			</http>
+
+			<log level="info" value="#{#TAG} uploadB2BInvoiceResponse : #{#uploadB2BInvoiceResponse}" />
+
+			<if condition="#{#uploadB2BInvoiceResponse.contains('B2B Invoice is already processed for Order id')}">
+				<log level="info" value="#{#TAG} Invoice already uploaded." />
+				<break />
+
+				<else>
+					<if condition="#{ #uploadB2BInvoiceResponseResponseCode >= 400 }">
+
+						<if condition="#{ !(#uploadB2BInvoiceResponseResponseCode eq 429) }">
+							<scriptError message="Getting status: #{#uploadB2BInvoiceResponseResponseCode} from AJIO. Kindly connect with their team." />
+
+							<else>
+								<log level="info" value="#{#TAG} Request Throttled. Sleeping for 50 seconds" />
+								<var value="#{T(java.lang.Thread).sleep(50000)}" />
+								<var name="throttleCount" value="#{#throttleCount + 1}" />
+							</else>
+						</if>
+
+						<else>
+							<var name="uploadB2BInvoiceResponseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#uploadB2BInvoiceResponse)}" />
+							<if condition="#{#uploadB2BInvoiceResponseJson.get('result') != null and !#uploadB2BInvoiceResponseJson.get('result').isJsonNull()}">
+								<var name="uploadStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#uploadB2BInvoiceResponseJson.get('result'), 'status')}" />
+								<if condition="#{'SUCCESS'.equals(#uploadStatus)}">
+									<log level="info" value="#{#TAG} B2B invoice uploaded successfully to AJIO" />
+
+									<else>
+										<scriptError message="Cannot upload B2B Invoice. #{T(com.unifier.core.utils.JsonUtils).getAsString(#uploadB2BInvoiceResponseJson.get('result'), 'error_message')}" />
+									</else>
+								</if>
+							</if>
+							<break />
+						</else>
+					</if>
+
+				</else>
+			</if>
+
+
+		</while>
+
+	</method>
+
+	<method name="fetchDocumentById">
+
+		<var name="throttleLimit" value="#{5}" />
+		<var name="throttleCount" value="#{0}" />
+
+		<while condition="#{#throttleCount &lt; #throttleLimit}">
+
+			<http method="GET" url="#{#baseApiUrl}/document/#{#documentId}" downloadToFile="#{#downloadFilePath}" var="downloadFileResponse" fetchStatusCode="true">
+				<header name="apiKey" value="#{#authToken}" />
+			</http>
+
+			<if condition="#{ #downloadFileResponseResponseCode >= 400 }">
+
+				<if condition="#{ !(#downloadFileResponseResponseCode eq 429) }">
+					<scriptError message="Getting status: #{#downloadFileResponseResponseCode} from AJIO. Kindly connect with their team." />
+
+					<else>
+						<log level="info" value="#{#TAG} Request Throttled. Sleeping for 50 seconds" />
+						<var value="#{T(java.lang.Thread).sleep(50000)}" />
+						<var name="throttleCount" value="#{#throttleCount + 1}" />
+					</else>
+				</if>
+
+				<else>
+					<try>
+						<var name="parsedFile" value="#{T(com.unifier.core.utils.PdfUtils).parsePdf(#downloadFilePath)}" />
+						<catch>
+							<scriptError message="Unable to parse B2C invoice pdf. Please contact support team." />
+						</catch>
+					</try>
+					<break />
+				</else>
+			</if>
+
+		</while>
+
+	</method>
+
+	<!-- PARAMS :   generateB2CInvoiceResponseJson
+     -->
+	<method name="checkForPartialBussinessCancellations">
+		<log level="info" value="#{#TAG} Checking bussiness cancellations" />
+		<var name="responseMap" value="#{new java.util.HashMap()}" />
+		<invoke method="prepareChannelSoiCodeToSoiItems" script="ajioOmniSaleOrderStatusSyncScript">
+			<param name="saleOrderItems" value="#{#shippingPackage.saleOrderItems}" />
+			<param name="responseMap" value="#{#responseMap}" />
+		</invoke>
+		<var name="channelSoiCodeToSoiItems" value="#{#responseMap.get('channelSoiCodeToSoiItems')}" />
+
+		<var name="b2cOrderLines" value="#{#generateB2CInvoiceResponseJson.get('order_lines').getAsJsonArray()}" />
+		<var name="b2cOrderLinesItr" value="#{#b2cOrderLines.iterator()}" />
+		<while condition="#{#b2cOrderLinesItr.hasNext()}">
+			<var name="b2cOrderLine" value="#{#b2cOrderLinesItr.next()}" />
+			<var name="b2cOrderItemId" value="#{#b2cOrderLine.get('order_item_id').getAsString()}" />
+			<var name="b2cOrderItemQty" value="#{#b2cOrderLine.get('quantity').getAsInt()}" />
+			<log level="info" value="#{#TAG} b2cOrderItemId : #{#b2cOrderItemId}, b2cOrderItemQty : #{#b2cOrderItemQty}" />
+			<var name="ucSoiItems" value="#{#channelSoiCodeToSoiItems.get(#b2cOrderItemId)}" />
+			<if condition="#{#ucSoiItems != null and #ucSoiItems.size() != #b2cOrderItemQty}">
+				<log level="info" value="#{#TAG} For item id : #{#b2cOrderItemId} : ucQty is #{#ucSoiItems.size()} and b2cOrderItemQty is #{#b2cOrderItemQty}" />
+				<scriptError message="Some of the items have been cancelled on Ajio. Please wait till the cancellations have been synced on Uniware" />
+				<else>
+					<if condition="#{#ucSoiItems != null}">
+						<log level="info" value="#{#TAG} Item id : #{#b2cOrderItemId} not present in channelSoiCodeToSoiItems" />
+						<else>
+							<log level="info" value="#{#TAG} No mismatch between ajio and uc qty" />
+						</else>
+					</if>
+				</else>
+			</if>
+		</while>
+	</method>
+
+	<method name="getB2CInvoiceFromAjio">
+
+		<var name="throttleLimit" value="#{5}" />
+		<var name="throttleCount" value="#{0}" />
+
+		<while condition="#{#throttleCount &lt; #throttleLimit}">
+
+			<http method="GET" url="#{#baseApiUrl}/orders/#{#orderId}/invoice/b2c" var="generateB2CInvoiceResponse" fetchStatusCode="true">
+				<header name="apiKey" value="#{#authToken}" />
+			</http>
+
+			<log level="info" value="#{#TAG} generateB2CInvoiceResponse : #{#generateB2CInvoiceResponse}" />
+			<log level="info" value="#{#TAG} generateB2CInvoiceResponseResponseCode : #{#generateB2CInvoiceResponseResponseCode}" />
+			<var name="generateB2CInvoiceResponseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#generateB2CInvoiceResponse)}" />
+
+			<if condition="#{ #generateB2CInvoiceResponseResponseCode >= 400 }">
+
+				<if condition="#{ !(#generateB2CInvoiceResponseResponseCode eq 429) }">
+					<var name="apiErrorMessage" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#generateB2CInvoiceResponseJson,'message')}" />
+					<var name="fullBussinessCancellationErrorMsg" value="Seller order which is involved in operation is marked as 'CANCELLED'" />
+					<if condition="#{#b2cInvoiceResponseResponseCode == 400 and #apiErrorMessage != null and #errorMessage.contains(#fullBussinessCancellationErrorMsg)}">
+						<var name="scriptErrorMessage" value="Some of the items have been cancelled on Ajio. Please wait till the cancellations have been synced on Uniware" />
+						<else>
+							<var name="scriptErrorMessage" value="Getting status: #{#generateB2CInvoiceResponseResponseCode} from AJIO for get B2C api. Kindly connect with their team." />
+						</else>
+					</if>
+					<scriptError message="#{#scriptErrorMessage}" />
+					<else>
+						<log level="info" value="#{#TAG} Request Throttled. Sleeping for 50 seconds" />
+						<var value="#{T(java.lang.Thread).sleep(50000)}" />
+						<var name="throttleCount" value="#{#throttleCount + 1}" />
+					</else>
+				</if>
+
+				<else>
+					<break />
+				</else>
+			</if>
+
+		</while>
+
+		<invoke method="checkForPartialBussinessCancellations">
+			<param name="generateB2CInvoiceResponseJson" value="#{#generateB2CInvoiceResponseJson}" />
+		</invoke>
+
+		<var name="b2c_invoice_pdf_url" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#generateB2CInvoiceResponseJson, 'b2c_invoice_pdf_url')}" />
+		<var name="b2cInvoiceId" value="#{#b2c_invoice_pdf_url.substring(#b2c_invoice_pdf_url.lastIndexOf('/') + 1, #b2c_invoice_pdf_url.length())}" />
+		<log level="info" value="#{#TAG} B2C Invoice Document ID: #{#b2cInvoiceId}" />
+		<var name="b2cInvoiceFileName" value="#{T(com.unifier.core.utils.EncryptionUtils).md5Encode(T(com.unifier.core.utils.DateUtils).getCurrentTime().getTime() + '_' + T(com.uniware.core.utils.UserContext).current().tenant.code + '_' + #fileIdentifier + '_B2CInvoice')}.pdf" />
+		<var name="b2cInvoiceFilePath" value="#{'shippingLabel/' + #b2cInvoiceFileName}" />
+		<var name="absoluteB2CInvoiceFilePath" value="#{T(com.unifier.core.utils.FileUtils).normalizeFilePath(T(com.unifier.core.cache.CacheManager).getInstance().getCache('environmentCache').exportDirectoryPath, #b2cInvoiceFilePath)}" />
+		<log level="info" value="#{#TAG} B2C Invoice Path: #{#absoluteB2CInvoiceFilePath}" />
+
+		<invoke method="fetchDocumentById">
+			<param name="documentId" value="#{#b2cInvoiceId}" />
+			<param name="downloadFilePath" value="#{#absoluteB2CInvoiceFilePath}" />
+		</invoke>
+
+	</method>
+
+	<method name="generateShippingLabelData">
+
+		<var name="throttleLimit" value="#{5}" />
+		<var name="throttleCount" value="#{0}" />
+
+		<while condition="#{#throttleCount &lt; #throttleLimit}">
+
+			<http method="GET" url="#{#baseApiUrl}/shipment/label" var="generateShippingLabelDataResponse" fetchStatusCode="true">
+				<header name="apiKey" value="#{#authToken}" />
+				<param name="order_id" value="#{#orderId}" />
+			</http>
+
+			<log level="info" value="#{#TAG} generateShippingLabelDataResponse : #{#generateShippingLabelDataResponse}" />
+
+			<if condition="#{ #generateShippingLabelDataResponseResponseCode >= 400 }">
+
+				<if condition="#{ !(#generateShippingLabelDataResponseResponseCode eq 429) }">
+					<scriptError message="Getting status: #{#generateShippingLabelDataResponseResponseCode} from AJIO. Kindly connect with their team." />
+
+					<else>
+						<log level="info" value="#{#TAG} Request Throttled. Sleeping for 50 seconds" />
+						<var value="#{T(java.lang.Thread).sleep(50000)}" />
+						<var name="throttleCount" value="#{#throttleCount + 1}" />
+					</else>
+				</if>
+
+				<else>
+					<var name="generateShippingLabelDataResponseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#generateShippingLabelDataResponse)}" />
+					<break />
+				</else>
+			</if>
+
+		</while>
+
+		<valueTag name="TrackingNumber" value="#{#generateShippingLabelDataResponseJson.get('awb').getAsString()}" />
+		<valueTag name="ShippingProvider" value="#{#generateShippingLabelDataResponseJson.get('carrier').getAsString()}" />
+	</method>
+
+	<method name="generateShippingLabelPdf">
+
+		<var name="throttleLimit" value="#{5}" />
+		<var name="throttleCount" value="#{0}" />
+
+		<var name="shippingLabelFileName" value="#{T(com.unifier.core.utils.EncryptionUtils).md5Encode(T(com.unifier.core.utils.DateUtils).getCurrentTime().getTime() + '_' + T(com.uniware.core.utils.UserContext).current().tenant.code + '_' + #fileIdentifier + '_Label')}.pdf" />
+		<var name="shippingLabelFilePath" value="#{'shippingLabel/' + #shippingLabelFileName}" />
+		<var name="absoluteShippingLabelFilePath" value="#{T(com.unifier.core.utils.FileUtils).normalizeFilePath(T(com.unifier.core.cache.CacheManager).getInstance().getCache('environmentCache').exportDirectoryPath, #shippingLabelFilePath)}" />
+		<log level="info" value="#{#TAG} Shipping Label Path: #{#absoluteShippingLabelFilePath}" />
+
+		<while condition="#{#throttleCount &lt; #throttleLimit}">
+
+			<http method="GET" url="#{#baseApiUrl}/shipment/label/pdf" var="generateShippingLabelPdfResponse" downloadToFile="#{#absoluteShippingLabelFilePath}" fetchStatusCode="true">
+				<header name="apiKey" value="#{#authToken}" />
+				<param name="order_id" value="#{#orderId}" />
+			</http>
+
+			<if condition="#{ #generateShippingLabelPdfResponseResponseCode >= 400 }">
+
+				<if condition="#{ !(#generateShippingLabelPdfResponseResponseCode eq 429) }">
+					<scriptError message="Getting status: #{#generateShippingLabelPdfResponseResponseCode} from AJIO. Kindly connect with their team." />
+
+					<else>
+						<log level="info" value="#{#TAG} Request Throttled. Sleeping for 50 seconds" />
+						<var value="#{T(java.lang.Thread).sleep(50000)}" />
+						<var name="throttleCount" value="#{#throttleCount + 1}" />
+					</else>
+				</if>
+
+				<else>
+					<try>
+						<var name="shippingLabelParsedPdf" value="#{T(com.unifier.core.utils.PdfUtils).parsePdf(#absoluteShippingLabelFilePath)}" />
+						<catch>
+							<scriptError message="Unable to parse shipping label pdf. Please contact support team." />
+						</catch>
+					</try>
+					<break />
+				</else>
+			</if>
+
+		</while>
+
+	</method>
+
+	<method name="mergeInvoiceAndLabelFiles">
+		<var name="labelPathList" value="#{new java.util.ArrayList()}" />
+		<var value="#{#labelPathList.add(#absoluteB2CInvoiceFilePath)}" />
+		<var value="#{#labelPathList.add(#absoluteShippingLabelFilePath)}" />
+
+		<var name="combinedLabelFileName" value="#{T(com.unifier.core.utils.EncryptionUtils).md5Encode(T(com.unifier.core.utils.DateUtils).getCurrentTime().getTime() + '_' + T(com.uniware.core.utils.UserContext).current().tenant.code + '_' + #fileIdentifier + '_CombinedLabel')}.pdf" />
+		<var name="combinedLabelFilePath" value="#{'shippingLabel/' + #combinedLabelFileName}" />
+		<var name="absoluteCombinedLabelFilePath" value="#{T(com.unifier.core.utils.FileUtils).normalizeFilePath(T(com.unifier.core.cache.CacheManager).getInstance().getCache('environmentCache').exportDirectoryPath, #combinedLabelFilePath)}" />
+		<log level="info" value="#{#TAG} Combined Shipping Label Path: #{#absoluteCombinedLabelFilePath}" />
+
+		<var value="#{T(com.unifier.core.utils.PdfUtils).concatPDF(#labelPathList, #absoluteCombinedLabelFilePath)}" />
+		<var name="invoiceAndShippingLabelS3URL" value="#{#applicationContext.getBean(T(com.uniware.services.document.IDocumentService)).uploadFile(new java.io.File(#absoluteCombinedLabelFilePath),'unicommerce-channel-shippinglabel')}" />
+		<log level="info" value="#{#TAG} invoiceAndShippingLabelS3URL : #{#invoiceAndShippingLabelS3URL}" />
+		<valueTag name="ShippingLabelLink" value="#{#invoiceAndShippingLabelS3URL}" />
+		<valueTag name="ShipmentLabelFormat" value="PDF" />
+	</method>
+
+	<method name="updateB2BInvoice">
+		<if condition="#{#shippingPackage?.invoice?.gstEInvoice != null}">
+			<log level="info" value="#{#TAG} Updating B2B invoice" />
+			<var name="formattedAckDate" value="#{T(com.unifier.core.utils.DateUtils).dateToString(#shippingPackage.invoice.gstEInvoice.ackDate, &quot;yyyy-MM-dd'T'HH:mm:ss&quot;)}+05:30" />
+
+			<var name="requestMap" value="#{new java.util.HashMap()}" />
+			<var value="#{#requestMap.put('b2b_invoice_number', #shippingPackage.invoice.displayCode.replaceAll('_', '-'))}" />
+			<var value="#{#requestMap.put('ack_number', #shippingPackage.invoice.gstEInvoice.ackNo)}" />
+			<var value="#{#requestMap.put('ack_date', #formattedAckDate)}" />
+			<var value="#{#requestMap.put('irn_number', #shippingPackage.invoice.gstEInvoice.irn)}" />
+			<var value="#{#requestMap.put('signed_invoice', #shippingPackage.invoice.gstEInvoice.signedInvoice)}" />
+			<var value="#{#requestMap.put('signed_qr_code', #shippingPackage.invoice.gstEInvoice.signedQRCode)}" />
+			<var value="#{#requestMap.put('pdf_required', false)}" />
+
+			<var name="updateB2BInvoiceRequestJson" value="#{T(com.unifier.core.utils.JsonUtils).objectToString(#requestMap)}" />
+
+			<log level="info" value="#{#TAG} updateB2BInvoiceRequestJson : #{#updateB2BInvoiceRequestJson}" />
+
+			<var name="throttleLimit" value="#{5}" />
+			<var name="throttleCount" value="#{0}" />
+
+			<while condition="#{#throttleCount &lt; #throttleLimit}">
+				<http method="PUT" url="#{#baseApiUrl}/orders/#{#orderId}/invoice/b2b" var="updateB2BInvoiceResponse" fetchStatusCode="true">
+					<header name="Content-Type" value="application/json" />
+					<header name="apiKey" value="#{#authToken}" />
+					<body>#{#updateB2BInvoiceRequestJson}</body>
+				</http>
+
+				<log level="info" value="#{#TAG} updateB2BInvoiceResponse : #{#updateB2BInvoiceResponse}" />
+				<var name="updateB2BInvoiceResponseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#updateB2BInvoiceResponse)}" />
+				<if condition="#{ #updateB2BInvoiceResponseResponseCode == 429 }">
+					<log level="info" value="#{#TAG} Request Throttled. Sleeping for 50 seconds" />
+					<var value="#{T(java.lang.Thread).sleep(50000)}" />
+					<var name="throttleCount" value="#{#throttleCount + 1}" />
+					<else>
+						<if condition="#{#updateB2BInvoiceResponseResponseCode == 200}">
+							<if condition="#{#updateB2BInvoiceResponseJson.get('status') != null and !#updateB2BInvoiceResponseJson.get('status').isJsonNull() and 'SUCCESS'.equalsIgnoreCase(#updateB2BInvoiceResponseJson.get('status').getAsString())}">
+								<log level="info" value="#{#TAG} B2B invoice updated successfully" />
+								<else>
+									<scriptError message="Error while updating B2B invoice. Kindly connect with AJIO team." />
+								</else>
+							</if>
+							<break />
+							<else>
+								<var name="errorMessage" value="#{#updateB2BInvoiceResponseJson.get('message')}" />
+								<if condition="#{#updateB2BInvoiceResponseResponseCode == 400 and #errorMessage != null and !#errorMessage.isJsonNull() and #errorMessage.getAsString().contains('B2B Invoice is already processed')}">
+									<log level="info" value="#{#TAG} einvoice details already updated on Ajio" />
+									<break />
+									<else>
+										<scriptError message="Getting status: #{#updateB2BInvoiceResponseResponseCode} from AJIO. Kindly connect with their team." />
+									</else>
+								</if>
+							</else>
+						</if>
+					</else>
+				</if>
+			</while>
+			<else>
+				<log level="info" value="#{#TAG} Not updating B2B invoice. No GST E-Invoice found for shipping package code : #{#shippingPackage.code}" />
+			</else>
+		</if>
+	</method>
+
+	<var name="saleOrderDetailsFound" value="#{false}" />
+	<var name="orderId" value="#{#shippingPackage.saleOrder.code}" />
+	<var name="fileIdentifier" value="#{#shippingPackage.saleOrder.code + '_' + #shippingPackage.facility.code + '_' + #shippingPackage.code}" />
+
+	<invoke method="fetchOrderDetails" />
+	<if condition="#{#saleOrderDetailsFound}">
+		<invoke method="updatePONumber" />
+		<else>
+			<scriptError message="Error fetching order details from AJIO. Please try after some time" />
+		</else>
+	</if>
+
+	<invoke method="generateB2BInvoice" />
+	<invoke method="updateB2BInvoice" />
+	<invoke method="getUCInvoiceLabel" />
+	<invoke method="uploadUCInvoiceToAjio" />
+	<invoke method="getB2CInvoiceFromAjio" />
+	<startTag name="ShippingProviderAllocation">
+		<attribute name="xmlns" value="http://uniware.unicommerce.com/services/" />
+	</startTag>
+	<invoke method="generateShippingLabelData" />
+	<invoke method="generateShippingLabelPdf" />
+	<invoke method="mergeInvoiceAndLabelFiles" />
+	<endTag name="ShippingProviderAllocation" />
+</scraper>
