@@ -1,0 +1,509 @@
+<scraper name="ajioOmniGetSaleOrderListScript" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.unicommerce.com/schema/scraper-1.0.xsd">
+
+	<!-- Algorithm: -->
+	<!--
+        0. Authorise and fetch AuthToken
+        1. Fetch pendency orders which are yet to be acknowledged and has no PO
+        2. Channel Config -> Order Acknowledgement lookup
+        3.  if lookup == Acknowledge only when sufficient inventory:
+                Fetch Inventory Details for SKUs present in SO
+                Acknowledge orders with sufficient inventory as 'Acknowledge' and 'Cancel' otherwise.
+            else :
+                Acknowledge orders as 'Acknowledge'.
+        4. Fetch Orders '/orders' to get confirmed orders whose PO also exist in system
+        5. Populate resultItems
+    -->
+
+	<var name="TAG" value="[ajioOmniGetSaleOrderListScript]" />
+	<var value="#{#metadata.put('customer', #customer)}" />
+
+	<var name="totalPage" value="#{#pageNumber}" />
+	<log level="info" value="#{#TAG} Fetching orders for Page: #{#pageNumber}" />
+
+	<var name="channelCode" value="#{#channel.code}" />
+	<var name="channelId" value="#{#channel.id}" />
+	<var name="baseApiUrl" value="http://116.50.64.106:8080/unicommerce" />
+
+	<!-- for testing purpose -->
+	<if condition="#{#acknowledgeOnInventoryBasis == null}">
+		<log level="info" value="Disprepency in finding acknowledgeOnInventoryBasis setting it to true" />
+		<var name="acknowledgeOnInventoryBasis" value="#{true}" />
+	</if>
+	<log level="info" value="channelCode : #{#channelCode} channelId : #{#channelId} " />
+
+	<log level="info" value="#{#TAG} acknowledgeOnInventoryBasis: #{#acknowledgeOnInventoryBasis}" />
+
+	<if condition="#{#metadata.get('totalPagesPendencyOrders') == null}">
+		<var name="totalPagesPendencyOrders" value="#{1}" />
+		<else>
+			<var name="totalPagesPendencyOrders" value="#{#metadata.get('totalPagesPendencyOrders')}" />
+		</else>
+	</if>
+	<if condition="#{#metadata.get('totalPagesAcknowledgedOrders') == null}">
+		<var name="totalPagesAcknowledgedOrders" value="#{1}" />
+		<else>
+			<var name="totalPagesAcknowledgedOrders" value="#{#metadata.get('totalPagesAcknowledgedOrders')}" />
+		</else>
+	</if>
+
+	<!-- Returns authToken -->
+	<method name="fetchAuthenticationToken">
+		<log level="info" value="Fetching Authentication token.." />
+		<var name="authParamsMap" value="#{new java.util.HashMap()}" />
+		<invoke method="fetchAuthToken" script="ajioOmniUserVerificationScript">
+			<param name="source" value="#{#source}" />
+			<param name="authToken" value="#{#authToken}" />
+			<param name="authParamsMap" value="#{#authParamsMap}" />
+			<param name="username" value="#{#username}" />
+			<param name="password" value="#{#password}" />
+		</invoke>
+		<var name="authToken" value="#{#authParamsMap.get('authToken')}" />
+		<var value="#{#metadata.put('authToken', #authToken)}" />
+	</method>
+
+	<!-- To Fetch Orders which are yet to be acknowledged. -->
+	<method name="fetchPendencyOrders">
+		<log level="info" value="fetchPendencyOrders Called!!" />
+		<var name="orderDateFrom" value="#{T(com.unifier.core.utils.DateUtils).dateToString( T(com.unifier.core.utils.DateUtils).addToDate(T(com.unifier.core.utils.DateUtils).getCurrentTime(), T(java.util.Calendar).DATE, -60), &quot;yyyy-MM-dd'T'HH:mm:ss&quot;)}+05:30" />
+		<var name="orderDateTo" value="#{T(com.unifier.core.utils.DateUtils).dateToString(T(com.unifier.core.utils.DateUtils).getCurrentTime(), &quot;yyyy-MM-dd'T'HH:mm:ss&quot;)}+05:30" />
+
+		<var name="throttleLimit" value="#{5}" />
+		<var name="throttleCount" value="#{0}" />
+
+		<while condition="#{#throttleCount &lt; #throttleLimit}">
+
+			<http method="GET" url="#{#baseApiUrl}/orders/pendency?pageNumber=#{1}&amp;pageSize=#{50}&amp;orderDateFrom=#{#orderDateFrom}&amp;orderDateTo=#{#orderDateTo}" var="saleOrderListResponse" fetchStatusCode="true">
+				<header name="apiKey" value="#{#authToken}" />
+			</http>
+
+			<log level="info" value="#{#TAG} saleOrderResponse: #{#saleOrderListResponse}" />
+
+			<if condition="#{ #saleOrderListResponseResponseCode >= 400 }">
+				<if condition="#{ !(#saleOrderListResponseResponseCode eq 429) }">
+					<scriptError message="Getting status: #{#saleOrderListResponseResponseCode} from AJIO. Kindly connect with their team." />
+
+					<else>
+						<log level="info" value="#{#TAG} Request Throttled. Sleeping for 50 seconds" />
+						<var value="#{T(java.lang.Thread).sleep(50000)}" />
+						<var name="throttleCount" value="#{#throttleCount + 1}" />
+					</else>
+				</if>
+				<else>
+					<var name="pendencyListJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#saleOrderListResponse)}" />
+					<break />
+				</else>
+			</if>
+		</while>
+
+		<var name="saleOrderToSaleOrderDetailsMap" value="#{new java.util.HashMap()}" />
+		<if condition="#{#pendencyListJson.get('orders') != null and !#pendencyListJson.get('orders').isJsonNull()}">
+			<var name="saleOrderIterator" value="#{#pendencyListJson.get('orders').getAsJsonArray().iterator()}" />
+			<while condition="#{#saleOrderIterator.hasNext()}">
+				<var name="saleOrderJson" value="#{#saleOrderIterator.next()}" />
+				<var name="saleOrderCode" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderJson, 'order_id')}" />
+				<var value="#{#saleOrderToSaleOrderDetailsMap.put(#saleOrderCode, #saleOrderJson)}" />
+				<var name="saleOrderComponentDetails" value="#{new java.util.ArrayList()}" />
+				<var name="saleOrderComponentsIterator" value="#{#saleOrderJson.get('order_lines').getAsJsonArray().iterator()}" />
+				<while condition="#{#saleOrderComponentsIterator.hasNext()}">
+					<var name="saleOrderComponent" value="#{#saleOrderComponentsIterator.next()}" />
+					<var name="orderedQty" value="#{#saleOrderComponent.get('ordered_quantity').getAsInt()}" />
+					<var name="variantId" value="#{#saleOrderComponent.get('item_details').get('item_code').getAsString()}" />
+					<var name="productId" value="#{#variantId.substring(0, #variantId.length() - 3)}" />
+					<var name="channelProductId" value="#{#productId}-#{#variantId}" />
+					<var name="orderItemId" value="#{#saleOrderComponent.get('order_item_id').getAsString()}" />
+					<var name="lineItemDetailsMap" value="#{new java.util.HashMap()}" />
+					<var value="#{#lineItemDetailsMap.put('channelProductId', #channelProductId)}" />
+					<var value="#{#lineItemDetailsMap.put('orderedQty', #orderedQty)}" />
+					<var value="#{#lineItemDetailsMap.put('orderItemId', #orderItemId)}" />
+					<var value="#{#saleOrderComponentDetails.add(#lineItemDetailsMap)}" />
+				</while>
+				<var value="#{#saleOrderIdToComponentDetails.put(#saleOrderCode, #saleOrderComponentDetails)}" />
+			</while>
+			<log level="info" value="#{#TAG} saleOrderToSaleOrderDetailsMap: #{#saleOrderToSaleOrderDetailsMap.toString()}" />
+		</if>
+		<if condition="#{#pendencyListJson.get('page') != null and !#pendencyListJson.get('page').isJsonNull()}">
+			<var name="totalPagesPendencyOrders" value="#{#pendencyListJson.get('page').getAsJsonObject().get('totalPages').getAsInt()}" />
+			<var value="#{#metadata.put('totalPagesPendencyOrders', #totalPagesPendencyOrders)}" />
+		</if>
+	</method>
+
+	<!-- For Bundle-SKU Handling whose data is not populated to facilityWiseInventoryMap, so we need to get that from nextInventoryUpdate -->
+	<method name="checkNextInventoryUpdate">
+		<log level="info" value="checkNextInventoryUpdate Called for #{#channelProductId}" />
+		<try>
+			<var name="channelCatalogDao" value="#{#applicationContext.getBean(T(com.uniware.dao.channel.IChannelCatalogDao))}" />
+			<var name="channelItemType" value="#{#channelCatalogDao.getChannelItemTypeByChannelAndChannelProductId(#channelId, #channelProductId, false)}" />
+			<var name="nextInventoryUpdate" value="#{#channelItemType.nextInventoryUpdate}" />
+			<log level="info" value="nextInventoryUpdate: #{#nextInventoryUpdate}" />
+
+			<if condition="#{#saleOrderIdToBeAcknowledged eq false and  #nextInventoryUpdate gt 0}">
+				<var name="saleOrderIdToBeAcknowledged" value="#{true}" />
+			</if>
+			<catch>
+				<var name="inventoryDetailsFound" value="#{false}" />
+				<log level="info" value="Unexpected Error occurred for: #{#channelProductId} while checkingNextInventoryUpdate" />
+			</catch>
+		</try>
+
+	</method>
+
+	<!-- Fetch SOAP credentials -->
+	<method name="getSoapCredentials">
+		<try>
+			<var name="tenantCode" value="#{T(com.uniware.core.utils.UserContext).current().tenant.code}" />
+			<log level="info" value="#{#TAG} tenantCode : #{#tenantCode}" />
+			<var name="tenantProfileService" value="#{#applicationContext.getBean('tenantProfileService')}" />
+			<var name="tenantProfile" value="#{#tenantProfileService.getTenantProfileByCode(#tenantCode)}" />
+			<var name="soapAccessUrl" value="https://#{#tenantProfile.accessUrl}:443/services/soap/?version=1.9" />
+			<var name="soapApiUsername" value="#{#tenantProfile.apiUsername}" />
+			<var name="soapApiPassword" value="#{#tenantProfile.apiPassword}" />
+			<catch>
+				<scriptError message="Unable to get SOAP Api credentials, please connect AppEng Team" />
+			</catch>
+		</try>
+		<var name="getChannelItemTypeDetailsUrl" value="#{#soapAccessUrl}" />
+		<log level="info" value="#{#TAG} soapAccessUrl : #{#soapAccessUrl} , soapApiPassword : #{#soapApiPassword} , soapApiPassword : #{#soapApiPassword}" />
+	</method>
+
+	<!-- To Perform Inventory Check and return those OrderIds of which all SKUs Inventory is present in sufficient amount -->
+	<method name="performInventoryCheck">
+		<log level="info" value="performInventoryCheck Called!!" />
+		<log level="info" value="#{#TAG} Requesting ChannelItemTypeDetails for #{#channelProductId}!" />
+
+		<var name="soapRequestXML">
+			<![CDATA[<soapenv:Envelope xmlns:ser="http://uniware.unicommerce.com/services/" xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+                <soapenv:Header>
+                    <wsse:Security soapenv:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
+                            <wsse:UsernameToken wsu:Id="UsernameToken-1">
+                                <wsse:Username>#{T(org.apache.commons.lang.StringEscapeUtils).escapeXml(#soapApiUsername)}</wsse:Username>
+                                <wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">#{T(org.apache.commons.lang.StringEscapeUtils).escapeXml(#soapApiPassword)}</wsse:Password>
+                                <wsse:Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">nvPjKUgjKSIcKYcsJdiVSg==</wsse:Nonce>
+                                <wsu:Created>2020-11-19T03:55:42.802Z</wsu:Created>
+                            </wsse:UsernameToken>
+                    </wsse:Security>
+                </soapenv:Header>
+                <soapenv:Body>
+                    <ser:GetChannelItemTypeDetailsRequest>
+                        <ser:ChannelCode>#{#channelCode}</ser:ChannelCode>
+                        <ser:ChannelProductId>#{#channelProductId}</ser:ChannelProductId>
+                    </ser:GetChannelItemTypeDetailsRequest>
+                </soapenv:Body>
+			</soapenv:Envelope>
+            ]]>
+		</var>
+		<log level="info" value="#{#TAG} SOAP Request XML : #{#soapRequestXML}" />
+		<log level="info" value="#{#TAG} SOAP Request URL : #{#getChannelItemTypeDetailsUrl}" />
+
+		<try>
+			<http url="#{#getChannelItemTypeDetailsUrl}" method="post" var="SOAPResponse" timeout="80">
+				<body>#{#soapRequestXML}</body>
+			</http>
+			<log level="info" value="#{#TAG} SOAP Response : #{#SOAPResponse}" />
+			<if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#SOAPResponse)}">
+				<var name="responseXml" value="#{T(com.unifier.core.utils.XMLParser).parse(#SOAPResponse)}" />
+				<if condition="#{#responseXml.text('Successful') != 'true'}">
+					<log level="info" value="#{#TAG} GetChannelItemTypeDetails Failure for #{#channelProductId} Checking InventoryUpdate" />
+					<var name="nextInventoryUpdate" value="#{0}" />
+					<invoke method="checkNextInventoryUpdate">
+						<param name="channelProductId" value="#{#channelProductId}" />
+						<param name="orderedQuantity" value="#{#orderedQuantity}" />
+						<param name="saleOrderIdToBeAcknowledged" value="#{#saleOrderIdToBeAcknowledged}" />
+						<param name="invFromMap" value="#{#inventory}" />
+						<param name="nextInventoryUpdate" value="#{#nextInventoryUpdate}" />
+					</invoke>
+					<if condition="#{#nextInventoryUpdate lt #orderedQuantity}">
+						<var name="confirmedQuantity" value="#{#nextInventoryUpdate}" />
+						<var name="cancelledQuantity" value="#{#orderedQuantity - #nextInventoryUpdate}" />
+						<else>
+							<var name="confirmedQuantity" value="#{#orderedQuantity}" />
+						</else>
+					</if>
+					<else>
+						<var name="facilityToInventoryMapString" value="#{#responseXml.text('FacilityToInventory')}" />
+						<if condition="#{#facilityToInventoryMapString != null and T(com.unifier.core.utils.StringUtils).isNotBlank(#facilityToInventoryMapString)}">
+							<var name="facilityToInventoryMap" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#facilityToInventoryMapString)}" />
+							<log level="info" value="#{#TAG} STORE_CODE: #{#store_code}" />
+							<if condition="#{#facilityToInventoryMap.get(#store_code) != null and !#facilityToInventoryMap.get(#store_code).isJsonNull()}">
+								<var name="inventory" value="#{new java.math.BigDecimal(#facilityToInventoryMap.get(#store_code).getAsInt())}" />
+							</if>
+							<if condition="#{#saleOrderIdToBeAcknowledged eq false and  #inventory != null and #inventory gt 0}">
+								<var name="saleOrderIdToBeAcknowledged" value="#{true}" />
+							</if>
+							<log level="info" value="#{#TAG} Inventory from SOAP Response: #{#inventory}" />
+							<if condition="#{#inventory == null or (#inventory != null and #inventory eq 0)}">
+								<var name="nextInventoryUpdate" value="#{0}" />
+								<invoke method="checkNextInventoryUpdate">
+									<param name="channelProductId" value="#{#channelProductId}" />
+									<param name="orderedQuantity" value="#{#orderedQuantity}" />
+									<param name="saleOrderIdToBeAcknowledged" value="#{#saleOrderIdToBeAcknowledged}" />
+									<param name="invFromMap" value="#{#inventory}" />
+									<param name="nextInventoryUpdate" value="#{#nextInventoryUpdate}" />
+								</invoke>
+								<if condition="#{#nextInventoryUpdate != null and nextInventoryUpdate != 0}">
+									<var name="inventory" value="#{#nextInventoryUpdate}" />
+								</if>
+							</if>
+
+							<if condition="#{#inventory ge #orderedQuantity}">
+								<var name="confirmedQuantity" value="#{#orderedQuantity}" />
+								<else>
+									<var name="confirmedQuantity" value="#{#inventory}" />
+									<var name="cancelledQuantity" value="#{#orderedQuantity - #inventory}" />
+								</else>
+							</if>
+							<else>
+								<var name="nextInventoryUpdate" value="#{0}" />
+								<invoke method="checkNextInventoryUpdate">
+									<param name="channelProductId" value="#{#channelProductId}" />
+									<param name="orderedQuantity" value="#{#orderedQuantity}" />
+									<param name="saleOrderIdToBeAcknowledged" value="#{#saleOrderIdToBeAcknowledged}" />
+									<param name="invFromMap" value="#{#inventory}" />
+									<param name="nextInventoryUpdate" value="#{#nextInventoryUpdate}" />
+								</invoke>
+								<if condition="#{#nextInventoryUpdate lt #orderedQuantity}">
+									<var name="confirmedQuantity" value="#{#nextInventoryUpdate}" />
+									<var name="cancelledQuantity" value="#{#orderedQuantity - #nextInventoryUpdate}" />
+									<else>
+										<var name="confirmedQuantity" value="#{#orderedQuantity}" />
+									</else>
+								</if>
+							</else>
+						</if>
+					</else>
+				</if>
+			</if>
+			<catch>
+				<var name="inventoryDetailsFound" value="#{false}" />
+				<log level="info" value="Unexpected Error occurred for: #{#channelProductId} while performing inventory check" />
+			</catch>
+		</try>
+	</method>
+
+	<!-- To Acknowledge Order and Triggers Purchase Order generation for CONFIRMED Orders -->
+	<method name="acknowledgeOrder">
+		<var name="orderId" value="#{#requestPayload.get('order_id')}" />
+		<log level="info" value="Acknowledging Order #{#orderId} ...." />
+
+		<try>
+			<var name="acknowledgeRequestJson" value="#{T(com.unifier.core.utils.JsonUtils).objectToString(#requestPayload)}" />
+			<var name="throttleLimit" value="#{5}" />
+			<var name="throttleCount" value="#{0}" />
+
+			<while condition="#{#throttleCount &lt; #throttleLimit}">
+
+				<log level="info" value="#{#TAG} acknowledgeRequestJson: #{#acknowledgeRequestJson}" />
+
+				<http method="POST" url="#{#baseApiUrl}/orders" var="acknowledgeResponse" fetchStatusCode="true">
+					<header name="Content-Type" value="application/json" />
+					<header name="apiKey" value="#{#authToken}" />
+					<body>#{#acknowledgeRequestJson}</body>
+				</http>
+
+				<log level="info" value="#{#TAG} acknowledgeResponse: #{#acknowledgeResponse}" />
+
+				<if condition="#{ #acknowledgeResponseResponseCode >= 400 }">
+
+					<if condition="#{ !(#acknowledgeResponseResponseCode eq 429) }">
+						<scriptError message="Getting status: #{#acknowledgeResponseResponseCode} from AJIO. Kindly connect with their team." />
+
+						<else>
+							<log level="info" value="#{#TAG} Request Throttled. Sleeping for 50 seconds" />
+							<var value="#{T(java.lang.Thread).sleep(50000)}" />
+							<var name="throttleCount" value="#{#throttleCount + 1}" />
+						</else>
+					</if>
+
+					<else>
+						<var name="acknowledgeResponseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#acknowledgeResponse)}" />
+						<break />
+					</else>
+				</if>
+
+			</while>
+
+			<if condition="#{#acknowledgeResponseJson != null and !#acknowledgeResponseJson.isJsonNull()}">
+				<var name="failedItemsIterator" value="#{#acknowledgeResponseJson.get('failed_items').getAsJsonArray()}" />
+				<if condition="#{#failedItemsIterator.size() gt 0}">
+					<log level="info" value="One or more items failed to acknowledge on Ajio order: #{#saleOrderCode}" />
+					<else>
+						<log level="info" value="#{#TAG} Successfully acknowledged order : #{#saleOrderCode} on Ajio" />
+					</else>
+				</if>
+				<else>
+					<log level="info" value="Invalid HTTP Response for order : #{#saleOrderCode} from Ajio" />
+				</else>
+			</if>
+			<catch>
+				<log level="info" value="unexpected Error occurred while acknowledging #{#orderId}" />
+			</catch>
+		</try>
+
+	</method>
+
+	<!-- To fetch Orders which are already acknowledge by seller and whose purchase order is generated in the system -->
+	<method name="fetchAcknowledgedOrders">
+		<log level="info" value="fetching Acknowledged Orders ...." />
+		<var name="orderDateFrom" value="#{T(com.unifier.core.utils.DateUtils).dateToString( T(com.unifier.core.utils.DateUtils).addToDate(T(com.unifier.core.utils.DateUtils).getCurrentTime(), T(java.util.Calendar).DATE, -60), &quot;yyyy-MM-dd'T'HH:mm:ss&quot;)}+05:30" />
+		<var name="orderDateTo" value="#{T(com.unifier.core.utils.DateUtils).dateToString(T(com.unifier.core.utils.DateUtils).getCurrentTime(), &quot;yyyy-MM-dd'T'HH:mm:ss&quot;)}+05:30" />
+		<var name="orderStatus" value="CONFIRMED" />
+
+		<var name="throttleLimit" value="#{5}" />
+		<var name="throttleCount" value="#{0}" />
+
+		<while condition="#{#throttleCount &lt; #throttleLimit}">
+
+			<http method="GET" url="#{#baseApiUrl}/orders?pageNumber=#{#pageNumber}&amp;pageSize=#{50}&amp;orderDateFrom=#{#orderDateFrom}&amp;orderDateTo=#{#orderDateTo}&amp;orderStatus=#{#orderStatus}" var="saleOrderListResponse" fetchStatusCode="true">
+				<header name="apiKey" value="#{#authToken}" />
+			</http>
+
+			<log level="info" value="#{#TAG} saleOrderResponse: #{#saleOrderListResponse}" />
+
+			<if condition="#{ #saleOrderListResponseResponseCode >= 400 }">
+				<if condition="#{ !(#saleOrderListResponseResponseCode eq 429) }">
+					<scriptError message="Getting status: #{#saleOrderListResponseResponseCode} from AJIO. Kindly connect with their team." />
+
+					<else>
+						<log level="info" value="#{#TAG} Request Throttled. Sleeping for 50 seconds" />
+						<var value="#{T(java.lang.Thread).sleep(50000)}" />
+						<var name="throttleCount" value="#{#throttleCount + 1}" />
+					</else>
+				</if>
+				<else>
+					<var name="poListJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#saleOrderListResponse)}" />
+					<break />
+				</else>
+			</if>
+		</while>
+
+
+		<if condition="#{#poListJson.get('orders') != null and !#poListJson.get('orders').isJsonNull()}">
+			<var name="saleOrderIterator" value="#{#poListJson.get('orders').getAsJsonArray().iterator()}" />
+			<while condition="#{#saleOrderIterator.hasNext()}">
+				<var name="saleOrderJson" value="#{#saleOrderIterator.next()}" />
+				<var name="saleOrderCode" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderJson, 'order_id')}" />
+				<valueTag name="SaleOrder" value="#{#saleOrderCode}" />
+				<var value="#{#resultItems.put(#saleOrderCode, #saleOrderJson)}" />
+			</while>
+			<log level="info" value="#{#TAG} resultItems: #{#resultItems.toString()}" />
+		</if>
+
+		<if condition="#{#poListJson.get('page') != null and !#poListJson.get('page').isJsonNull()}">
+			<var name="totalPagesAcknowledgedOrders" value="#{#poListJson.get('page').getAsJsonObject().get('totalPages').getAsInt()}" />
+			<var value="#{#metadata.put('totalPagesAcknowledgedOrders', #totalPagesAcknowledgedOrders)}" />
+			<if condition="#{#totalPagesPendencyOrders gt #totalPagesAcknowledgedOrders}">
+				<var name="totalPagesAcknowledgedOrders" value="#{#totalPagesPendencyOrders}" />
+			</if>
+			<if condition="#{#totalPagesAcknowledgedOrders &gt; #pageNumber}">
+				<var name="totalPage" value="#{#pageNumber + 1}" />
+				<else>
+					<var name="totalPage" value="#{#pageNumber}" />
+				</else>
+			</if>
+
+			<else>
+				<var name="totalPage" value="#{#pageNumber}" />
+			</else>
+		</if>
+
+	</method>
+
+	<!-- Main Execution Starts -->
+	<if condition="#{#metadata.get('authToken') == null}">
+		<invoke method="fetchAuthenticationToken" />
+		<else>
+			<var name="authToken" value="#{#metadata.get('authToken')}" />
+		</else>
+	</if>
+
+	<var name="getChannelItemTypeDetailsUrl" value="" />
+	<var name="soapApiUsername" value="" />
+	<var name="soapApiPassword" value="" />
+	<invoke method="getSoapCredentials">
+
+		<param name="soapApiUsername" value="#{#soapApiUsername}" />
+		<param name="soapApiPassword" value="#{#soapApiPassword}" />
+	</invoke>
+
+	<!-- Fetching Pendency Orders -->
+	<if condition="#{#totalPagesPendencyOrders gt 0}">
+		<invoke method="fetchPendencyOrders">
+			<param name="saleOrderIdToComponentDetails" value="#{new java.util.HashMap()}" />
+			<param name="authToken" value="#{#authToken}" />
+		</invoke>
+	</if>
+
+	<!-- Preparing Orders list for acknowledgement Request -->
+	<var name="saleOrdersAcknowledgementPayload" value="#{new java.util.ArrayList()}" />
+	<foreach collection="#{#saleOrderIdToComponentDetails}" var="componentDetails">
+		<var name="saleOrderId" value="#{#componentDetails.getKey()}" />
+		<log level="info" value="Processing Pendency for SO ID: #{#saleOrderId}" />
+		<var name="saleOrderIdToBeAcknowledged" value="#{false}" />
+		<var name="inventoryDetailsFound" value="#{true}" />
+		<var name="componentDetailsList" value="#{#componentDetails.getValue()}" />
+		<var name="saleOrderLines" value="#{new java.util.ArrayList()}" />
+		<foreach collection="#{#componentDetailsList}" var="componentDetailsListEntry">
+			<var name="orderItemId" value="#{#componentDetailsListEntry.get('orderItemId')}" />
+			<var name="channelProductId" value="#{#componentDetailsListEntry.get('channelProductId')}" />
+			<var name="orderedQuantity" value="#{#componentDetailsListEntry.get('orderedQty')}" />
+			<if condition="#{#acknowledgeOnInventoryBasis}">
+				<var name="cancelledQuantity" value="#{0}" />
+				<var name="confirmedQuantity" value="#{0}" />
+				<invoke method="performInventoryCheck">
+					<param name="saleOrderId" value="#{#saleOrderId}" />
+					<param name="channelProductId" value="#{#channelProductId}" />
+					<param name="orderedQuantity" value="#{#orderedQuantity}" />
+				</invoke>
+				<if condition="#{!#inventoryDetailsFound}">
+					<var name="confirmedQuantity" value="#{#orderedQuantity}" />
+					<var name="cancelledQuantity" value="#{0}" />
+					<var name="inventoryDetailsFound" value="#{true}" />
+					<var name="saleOrderIdToBeAcknowledged" value="#{true}" />
+				</if>
+				<else>
+					<var name="cancelledQuantity" value="#{0}" />
+					<var name="confirmedQuantity" value="#{#orderedQuantity}" />
+				</else>
+			</if>
+			<var name="saleOrderLineDetail" value="#{new java.util.HashMap()}" />
+			<var value="#{#saleOrderLineDetail.put('cancelled_quantity', #cancelledQuantity)}" />
+			<var value="#{#saleOrderLineDetail.put('confirmed_quantity', #confirmedQuantity)}" />
+			<var value="#{#saleOrderLineDetail.put('order_item_id', #orderItemId)}" />
+			<log level="info" value="#{#TAG} requestPayload: #{#saleOrderLineDetail.toString()}" />
+			<var value="#{#saleOrderLines.add(#saleOrderLineDetail)}" />
+		</foreach>
+		<var name="saleOrderAcknowledgementPayload" value="#{new java.util.HashMap()}" />
+		<var value="#{#saleOrderAcknowledgementPayload.put('order_id', #saleOrderId)}" />
+		<if condition="#{#acknowledgeOnInventoryBasis}">
+			<if condition="#{#saleOrderIdToBeAcknowledged}">
+				<var value="#{#saleOrderAcknowledgementPayload.put('status', 'Acknowledge')}" />
+				<else>
+					<var value="#{#saleOrderAcknowledgementPayload.put('status', 'Cancel')}" />
+				</else>
+			</if>
+			<else>
+				<var value="#{#saleOrderAcknowledgementPayload.put('status', 'Acknowledge')}" />
+			</else>
+		</if>
+		<var value="#{#saleOrderAcknowledgementPayload.put('order_lines', #saleOrderLines)}" />
+		<var value="#{#saleOrdersAcknowledgementPayload.add(#saleOrderAcknowledgementPayload)}" />
+	</foreach>
+
+	<!-- Acknowledge orders -->
+	<foreach collection="#{#saleOrdersAcknowledgementPayload}" var="saleOrderAcknowledgementPayload">
+		<invoke method="acknowledgeOrder">
+			<param name="requestPayload" value="#{#saleOrderAcknowledgementPayload}" />
+			<param name="authToken" value="#{#authToken}" />
+		</invoke>
+	</foreach>
+
+	<!-- Fetching acknowledged orders to populate resultItems -->
+	<startTag name="SaleOrders" />
+	<if condition="#{#totalPagesAcknowledgedOrders gt 0}">
+		<invoke method="fetchAcknowledgedOrders">
+			<param name="authToken" value="#{#authToken}" />
+		</invoke>
+	</if>
+	<valueTag name="TotalPages" value="#{#totalPage}" />
+	<endTag name="SaleOrders" />
+
+</scraper>
