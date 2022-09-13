@@ -332,9 +332,7 @@
 		<valueTag name="TotalShippingCharges" value="#{#shippingCharges}" />
 		<valueTag name="TotalCashOnDeliveryCharges" value="#{#codCharges!=null?#codCharges: T(com.unifier.core.utils.NumberUtils).newBigDecimal(0.00)}" />
 		<var name="prepaidAmount" value="#{#giftDiscount}" />
-		<if condition="#{#fetchPartiallyPaidOrders}">
-			<var name="prepaidAmount" value="#{#prepaidAmount.add(#partiallyPaidAmount)}" />
-		</if>
+		<var name="prepaidAmount" value="#{#prepaidAmount.add(#partiallyPaidAmount)}" />
 		<var name="subtotal" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#saleOrderJson.get('total_line_items_price').getAsString())}" />
 		<var name="totalOrderAmount" value="#{#shippingCharges.add(#subtotal)}" />
 		<if condition="#{(#prepaidAmount.add(#discount)) &gt; #totalOrderAmount}">
@@ -580,8 +578,6 @@
 
 	<log level="info" value="#{#TAG} url : #{#url}, authHeaders : #{#authHeaders.toString()}" />
 
-	<!-- Add a config parameter -->
-	<var name="fetchPartiallyPaidOrders" value="#{#fetchPartiallyPaidOrders == null ? false : #fetchPartiallyPaidOrders}" />
 	<log level="debug" value="#{#TAG} SaleOrderDetailElement : #{#saleOrderDetailElement.toString()}" />
 	<var name="saleOrderJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#saleOrderDetailElement)}" />
 	<var name="financialStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderJson, 'financial_status')}" />
@@ -643,7 +639,7 @@
                 )}">
 
 				<!-- Checking COD and todo: good comment for draft order-->
-				<if condition="#{#fetchPartiallyPaidOrders and 'partially_paid'.equalsIgnoreCase(#financialStatus)}">
+				<if condition="#{'partially_paid'.equalsIgnoreCase(#financialStatus)}">
 					<var name="cashOnDelivery" value="#{true}" />
 					<else>
 						<if condition="#{
@@ -674,7 +670,7 @@
 						<var name="giftDiscount" value="#{'REFUND'.equalsIgnoreCase(#transactionKind) ? #giftDiscount.subtract(#transactionAmount) : #giftDiscount.add(#transactionAmount)}" />
 					</if>
 					<!-- Calculating partiallyPaidAmount -->
-					<if condition="#{#fetchPartiallyPaidOrders and 'partially_paid'.equals(#gateway.getAsString())}">
+					<if condition="#{'partially_paid'.equals(#gateway.getAsString())}">
 						<var name="partiallyPaidTransactionFound" value="#{true}" />
 						<var name="partiallyPaidAmount" value="#{#partiallyPaidAmount.add(#transactionAmount)}" />
 					</if>
@@ -695,8 +691,8 @@
 			</if>
 			<log level="info" value="#{#TAG} SaleOrderTransaction : #{#saleOrderTransaction.toString()}, giftDiscount: #{#giftDiscount}, cashOnDelivery : #{#cashOnDelivery}" />
 		</while>
-		<log level="info" value="fetchPartiallyPaidOrders: #{#fetchPartiallyPaidOrders}, financialStatus: #{#financialStatus}, giftDiscountTransactionFound: #{#giftDiscountTransactionFound}, partiallyPaidTransactionFound: #{#partiallyPaidTransactionFound}" />
-		<if condition="#{#fetchPartiallyPaidOrders and 'partially_paid'.equalsIgnoreCase(#financialStatus) and !#giftDiscountTransactionFound and !#partiallyPaidTransactionFound}">
+		<log level="info" value="financialStatus: #{#financialStatus}, giftDiscountTransactionFound: #{#giftDiscountTransactionFound}, partiallyPaidTransactionFound: #{#partiallyPaidTransactionFound}" />
+		<if condition="#{'partially_paid'.equalsIgnoreCase(#financialStatus) and !#giftDiscountTransactionFound and !#partiallyPaidTransactionFound}">
 			<log level="info" value="Skipping order #{#saleOrderCode} since no transaction found with gateway partially_paid or gift_card" />
 			<else>
 				<if condition="#{
