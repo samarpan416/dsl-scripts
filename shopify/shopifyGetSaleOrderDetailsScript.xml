@@ -561,6 +561,21 @@
 		</if>
 
 		<invoke method="populateCustomFields" />
+
+		<try>
+			<invoke method="postprocessor" script="shopifyCustomizationsScript">
+				<param name="saleOrderJson" value="#{#saleOrderJson}" />
+			</invoke>
+			<if condition="#{#saleOrderJson.get('ucPriority') != null}">
+				<var name="ucPriority" value="#{#saleOrderJson.get('ucPriority').getAsInt()}" />
+				<valueTag name="Priority" value="#{#ucPriority}" />
+			</if>
+
+			<catch>
+				<log level="info" value="#{#_e.getMessage()}" />
+			</catch>
+		</try>
+
 		<endTag name="SaleOrder" />
 		<endTag name="CreateSaleOrderRequest" />
 	</method>
