@@ -1,0 +1,233 @@
+<scraper name="shopifySaleOrderStatusSyncMetadataScript" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.unicommerce.com/schema/scraper-1.0.xsd">
+    <!--  Fetches orders from shopify and maps saleOrderCode to saleOrderStatus in "resultItems" map  -->
+    <var name="TAG" value="[ShopifySaleOrderStatusSyncMetadataScript]" />
+
+    <var name="API_VERSION" value="2021-01" />
+    <var name="ORDER_LIMIT_PER_REQUEST" value="250" />
+    <var name="DAYS_TO_FETCH_ORDERS_FOR" value="#{7}" />
+
+    <var name="updatedAfter" value="#{T(java.time.ZonedDateTime).now().minusDays(#DAYS_TO_FETCH_ORDERS_FOR).toLocalDateTime().toString()}" />
+    <log level="info" value="#{#TAG} syncPendingOrdersOnly : #{#syncPendingOrdersOnly}" />
+    <var name="finalQueryParams" value="#{new java.util.HashMap()}" />
+    <var value="#{#finalQueryParams.put('limit', #ORDER_LIMIT_PER_REQUEST)}" />
+
+    <method name="prepareOrderFiltersList">
+        <var name="orderFilters" value="#{new java.util.ArrayList()}" />
+        <var name="responseFields" value="id,financial_status,fulfillment_status,status,refunds,cancelled_at" />
+        <!--  Set Filters for each status  -->
+        <var name="refundedQueryParams" value="#{new java.util.HashMap()}" />
+        <var value="#{#refundedQueryParams.put('status','any')}" />
+        <var value="#{#refundedQueryParams.put('financial_status','refunded')}" />
+        <var value="#{#refundedQueryParams.put('fields', #responseFields)}" />
+
+        <var name="partiallyRefundedQueryParams" value="#{new java.util.HashMap()}" />
+        <var value="#{#partiallyRefundedQueryParams.put('status','any')}" />
+        <var value="#{#partiallyRefundedQueryParams.put('financial_status','partially_refunded')}" />
+        <var value="#{#partiallyRefundedQueryParams.put('fields', #responseFields)}" />
+
+        <var name="cancelledQueryParams" value="#{new java.util.HashMap()}" />
+        <var value="#{#cancelledQueryParams.put('status','cancelled')}" />
+        <var value="#{#cancelledQueryParams.put('fields', #responseFields)}" />
+
+        <var name="fulfilledQueryParams" value="#{new java.util.HashMap()}" />
+        <var value="#{#fulfilledQueryParams.put('status','any')}" />
+        <var value="#{#fulfilledQueryParams.put('fulfillment_status','shipped')}" />
+        <var value="#{#fulfilledQueryParams.put('fields', #responseFields)}" />
+
+        <var value="#{#orderFilters.add(#fulfilledQueryParams)}" />
+        <var value="#{#orderFilters.add(#cancelledQueryParams)}" />
+        <var value="#{#orderFilters.add(#refundedQueryParams)}" />
+        <var value="#{#orderFilters.add(#partiallyRefundedQueryParams)}" />
+    </method>
+
+    <!--  Pagination Logic . Docs -> https://shopify.dev/tutorials/make-paginated-requests-to-rest-admin-api#make-a-paginated-request-and-iterate-through-the-pages  -->
+    <method name="getNextPageInfo">
+        <log level="debug" value="#{#TAG} Response Header Link : #{#link}" />
+
+        <var name="pageInfo" value="" />
+
+        <if condition="#{#link eq null}">
+            <log level="debug" value="#{#TAG} Link not found in Response Headers." />
+
+            <else>
+                <var name="linkArray" value="#{#link.split(',')}" />
+                <var name="relNext" value="#{ (#linkArray.length &gt; 1) ? #linkArray[1]: #linkArray[0] }" />
+                <!-- Extracting page_info from the Link using regex since we get 2 urls,previous page and next page.
+                    We need to extract page_info from the next page url  -->
+                <var name="nextPageInfoPattern" value="#{'(?&lt;=page_info=)(.*)(?=&gt;; rel=&#34;next&#34;)'}" />
+                <var name="nextPageInfoMatcher" value="#{T(java.util.regex.Pattern).compile(#nextPageInfoPattern).matcher(#relNext)}" />
+                <while condition="#{#nextPageInfoMatcher.find()}">
+                    <var name="pageInfo" value="#{#nextPageInfoMatcher.group()}" />
+                </while>
+
+                <if condition="#{T(com.unifier.core.utils.StringUtils).isBlank(#pageInfo)}">
+                    <log level="debug" value="#{#TAG} page_info for next page NOT_FOUND." />
+                </if>
+            </else>
+        </if>
+
+    </method>
+
+    <!-- PARAMS :   restockTypeToUcStatus
+    -->
+    <method name="processRefundedOrPartiallyRefundedOrder">
+        <log level="info" value="#{#TAG} Processing refunds for #{#saleOrderCode}" />
+        <var name="refundsItr" value="#{#saleOrderJson.get('refunds').getAsJsonArray().iterator()}" />
+        <var name="lineItemIdToMetadata" value="#{new java.util.HashMap()}" />
+
+        <!-- There will always be at least 1 refund -->
+        <while condition="#{#refundsItr.hasNext()}">
+            <var name="refund" value="#{#refundsItr.next()}" />
+            <var name="refundLineItems" value="#{#refund.get('refund_line_items').getAsJsonArray()}" />
+            <var name="refundLineItemsItr" value="#{#refundLineItems.iterator()}" />
+
+            <while condition="#{#refundLineItemsItr.hasNext()}">
+                <var name="refundLineItem" value="#{#refundLineItemsItr.next()}" />
+                <var name="restockType" value="#{#refundLineItem.get('restock_type').getAsString()}" />
+                <var name="lineItemId" value="#{#refundLineItem.get('line_item_id').getAsString()}" />
+                <var name="refundLineItemQty" value="#{#refundLineItem.get('quantity').getAsInt()}" />
+
+                <if condition="#{T(com.unifier.core.utils.StringUtils).equalsAny(#restockType, 'return', 'cancel')}">
+                    <var name="lineItemMetadata" value="#{#lineItemIdToMetadata.get(#lineItemId)}" />
+                    <if condition="#{#lineItemMetadata == null}">
+                        <var name="lineItemMetadata" value="#{new java.util.HashMap()}" />
+
+                        <var value="#{#lineItemMetadata.put('cancelledQty', 0)}" />
+                        <var value="#{#lineItemMetadata.put('returnedQty', 0)}" />
+                        <var value="#{#lineItemIdToMetadata.put(#lineItemId, #lineItemMetadata)}" />
+                    </if>
+
+
+                    <if condition="#{'cancel'.equals(#restockType)}">
+                        <var value="#{#lineItemMetadata.put('cancelledQty', #lineItemMetadata.get('cancelledQty') + #refundLineItemQty )}" />
+                    </if>
+                    <if condition="#{'return'.equals(#restockType)}">
+                        <var value="#{#lineItemMetadata.put('returnedQty', #lineItemMetadata.get('returnedQty') + #refundLineItemQty )}" />
+                    </if>
+                    <else>
+                        <log level="info" value="#{#TAG} Ignoring refund for line item : #{#lineItemId} , restockType : #{#restockType}" />
+                    </else>
+                </if>
+            </while>
+        </while>
+
+        <if condition="#{#lineItemIdToMetadata.size() gt 0}">
+            <var value="#{#orderMetadata.put('lineItemIdToMetadata' , #lineItemIdToMetadata)}" />
+        </if>
+
+    </method>
+
+    <method name="processOrders">
+        <while condition="#{#saleOrderIterator.hasNext()}">
+            <var name="saleOrderJson" value="#{#saleOrderIterator.next()}" />
+            <var name="saleOrderCode" value="#{#saleOrderJson.get('id').getAsString()}" />
+
+            <var name="fulfillmentStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderJson,'fulfillment_status')}" />
+            <var name="financialStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderJson,'financial_status')}" />
+            <var name="isOrderCancelled" value="#{!#saleOrderJson.get('cancelled_at').isJsonNull()}" />
+
+            <log level="info" value="#{#TAG} saleOrderCode : #{#saleOrderCode} , isOrderCancelled : #{#isOrderCancelled} , fulfillmentStatus : #{#fulfillmentStatus} , financialStatus : #{#financialStatus}" />
+
+            <var name="orderMetadata" value="#{new java.util.HashMap()}" />
+            <if condition="#{#resultItems.get(#saleOrderCode) == null}">
+                <var value="#{#orderMetadata.put('isOrderCancelled' , #isOrderCancelled)}" />
+                <if condition="#{#isOrderCancelled}">
+                    <log level="info" value="#{#TAG} Order : #{#saleOrderCode} is cancelled on Shopify" />
+                    <else>
+                        <if condition="#{'fulfilled'.equals(#fulfillmentStatus)}">
+                            <var value="#{#orderMetadata.put('fulfillmentStatus', 'fulfilled')}" />
+                        </if>
+                        <if condition="#{#financialStatus != null and T(com.unifier.core.utils.StringUtils).equalsAny(#financialStatus, 'partially_refunded', 'refunded')}">
+                            <invoke method="processRefundedOrPartiallyRefundedOrder" />
+                        </if>
+                    </else>
+                </if>
+                <else>
+                    <log level="info" value="#{#TAG} Skipping sale order #{#saleOrderCode} since it has already been handled. fulfillmentStatus : #{#fulfillmentStatus} , financialStatus : #{#financialStatus}" />
+                </else>
+            </if>
+            <if condition="#{#orderMetadata.size() gt 0}">
+                <var value="#{#resultItems.put(#saleOrderCode , #orderMetadata)}" />
+            </if>
+        </while>
+    </method>
+
+    <method name="getOrders">
+        <var name="hasMoreOrders" value="true" />
+
+        <var name="urlQueryParams" value="#{new java.util.HashMap()}" />
+        <var value="#{#urlQueryParams.putAll(#finalQueryParams)}" />
+        <var value="#{#urlQueryParams.putAll(#queryParams)}" />
+        <var value="#{#urlQueryParams.put('updated_at_min', #updatedAfter)}" />
+
+        <while condition="#{#hasMoreOrders}">
+            <if condition="#{#isPublicApp}">
+                <http method="get" url="#{#getOrdersUrl}" var="saleOrderListResponse" fetchResponseHeaders="true">
+                    <header name="X-Shopify-Access-Token" value="#{#token}" />
+                    <params map="#{#urlQueryParams}" />
+                </http>
+                <else>
+                    <http method="get" url="#{#getOrdersUrl}" var="saleOrderListResponse" fetchResponseHeaders="true">
+                        <params map="#{#urlQueryParams}" />
+                    </http>
+                </else>
+            </if>
+            <!--  API response and response headers  -->
+            <log level="info" value="#{#TAG} saleOrderListResponseHeaders : #{#saleOrderListResponseHeaders.toString()}" />
+
+            <!--  Process Orders  -->
+            <if condition="#{#saleOrderListResponse.contains('errors') or #saleOrderListResponse.contains('errors') or #saleOrderListResponse == null }">
+                <scriptError message="Unable to authenticate with the given credentials." />
+            </if>
+            <var name="saleOrderListJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#saleOrderListResponse)}" />
+            <var name="saleOrderIterator" value="#{#saleOrderListJson.get('orders').getAsJsonArray().iterator()}" />
+
+            <log level="info" value="#{#TAG} SaleOrdersCount : #{#saleOrderListJson.get('orders').getAsJsonArray().size()}" />
+            <log level="info" value="#{#TAG} SaleOrders : #{#saleOrderListJson.get('orders').toString()}" />
+
+            <invoke method="processOrders" />
+
+            <invoke method="getNextPageInfo">
+                <param name="link" value="#{#saleOrderListResponseHeaders.get('Link')}" />
+            </invoke>
+            <log level="debug" value="#{#TAG} PageInfo for Next-Page : #{#pageInfo}" />
+
+            <if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#pageInfo)}">
+                <var name="hasMoreOrders" value="#{true}" />
+                <!-- NOTE : 'page_info' allows only for finalQueryParams, which are 'limit', 'fields'. -->
+                <var value="#{#urlQueryParams.clear()}" />
+                <var value="#{#urlQueryParams.putAll(#finalQueryParams)}" />
+                <var value="#{#urlQueryParams.put('page_info', #pageInfo)}" />
+                <else>
+                    <var name="hasMoreOrders" value="#{false}" />
+                </else>
+            </if>
+        </while>
+    </method>
+
+    <!--  Private Apps Docs - https://shopify.dev/tutorials/authenticate-a-private-app-with-shopify-admin#make-authenticated-requests  -->
+    <var name="isPublicApp" value="#{T(com.unifier.core.utils.StringUtils).isBlank(#apiKey)}" />
+
+    <if condition="#{#isPublicApp}">
+        <var name="shopifyUrl" value="https://#{#hostname}/admin/api/#{#API_VERSION}" />
+        <else>
+            <!-- For private apps authentication is done using apiKey and password  -->
+            <var name="shopifyUrl" value="https://#{#apiKey}:#{#password}@#{#hostname}/admin/api/#{#API_VERSION}" />
+        </else>
+    </if>
+
+    <var name="getOrdersUrl" value="#{#shopifyUrl}/orders.json" />
+
+    <!-- Returns orderFilters list -->
+    <invoke method="prepareOrderFiltersList" />
+
+    <!-- Make API calls for each status with it's corresponding filters -->
+    <foreach collection="#{#orderFilters}" var="orderFilter">
+        <log level="info" value="#{#TAG} Fetching orders with orderFilter : #{#orderFilter.toString()}" />
+        <invoke method="getOrders">
+            <param name="queryParams" value="#{#orderFilter}" />
+        </invoke>
+    </foreach>
+
+    <log level="info" value="#{#TAG} resultItems : #{#resultItems.toString()}" />
+</scraper>
