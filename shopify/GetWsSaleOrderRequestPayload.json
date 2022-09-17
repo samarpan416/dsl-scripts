@@ -1,0 +1,17 @@
+{
+    "orderId": "",
+    "order":"saleOrderDetailElement",
+    "configurationParameters":{
+        "applicableProvinceCodes":"",
+        "stateCodeRequired":"",
+        "customFieldsCustomization":"",
+        "enablePOS":""
+    },
+    "connectorParameters":{
+        "apiKey":"",
+        "hostname":"",
+        "password":"",
+        "accessToken":"",
+        "prefix":""
+    }
+}
