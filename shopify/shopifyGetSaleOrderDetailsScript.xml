@@ -1,734 +1,209 @@
 <scraper name="shopifyGetSaleOrderDetailsScript" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.unicommerce.com/schema/scraper-1.0.xsd" cachehttpclient="false">
-	<!-- 
-        CUSTOMIZATIONS Supported in the script
-        -> saleOrderJson : 
-                all the fields from SaleOrderAPI response can be fetched from this json.
-                e.g SOURCE_NAME: "#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderJson, 'source_name')}"
-        -> saleOrderTransaction :
-                the fields available from this object are the SaleOrderTransactionAPI response fields.
-                e.g RECEIPT: "#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderTransaction, 'receipt')}"
-        -> receiptJson :
-                all fields from a receipt object from a saleOrder Transaction are available from this json.
-                e.g X_WEB_REF: "#{T(com.unifier.core.utils.JsonUtils).getAsString(#receiptJson, 'x_gateway_reference')}"
+	<log level="debug" value="#{#TAG} SaleOrderDetailElement : #{#saleOrderDetailElement.toString()}" />
 
-        PARAMS: 
-                channel
-                source
-                saleOrderCode
-                saleOrderElement
-                saleOrderDetailElement - Map<SaleOrderCode,SaleOrderDetails>
-                metadata
-                applicationContext
-     -->
-	<method name="populateCustomFields">
-		<var name="customFieldMap" value="#{new java.util.HashMap()}" />
-		<if condition="#{#customFieldsCustomization == null or ''.equals(#customFieldsCustomization)}">
-			<var name="customFieldsCustomization" value="[]" />
-		</if>
-		<try>
-			<var name="customFieldsCustomizationMap" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#customFieldsCustomization)}" />
-			<var name="customFieldsCustomizationMapIterator" value="#{#customFieldsCustomizationMap.getAsJsonArray().iterator()}" />
-			<while condition="#{#customFieldsCustomizationMapIterator.hasNext()}">
-				<var name="customField" value="#{#customFieldsCustomizationMapIterator.next()}" />
-				<var name="customFieldEntrySet" value="#{#customField.entrySet().iterator()}" />
-				<var name="entry" value="#{#customFieldEntrySet.next()}" />
-				<try>
-					<var name="customFieldValue" value="#{T(com.unifier.scraper.sl.expression.SLExpression).compile(#entry.getValue()).evaluate(T(com.unifier.scraper.sl.runtime.ScriptExecutionContext).current())}" />
-					<var value="#{#customFieldMap.put(#entry.getKey(),#customFieldValue)}" />
-					<catch>
-						<!-- TODO Stop execution or NOT
-                        create new method
-                    -->
-						<log level="info" value="Error with CustomField : #{#entry.getKey()}" />
-					</catch>
-				</try>
-			</while>
-			<startTag name="CustomFields" />
-			<var name="customFieldMapIterator" value="#{#customFieldMap.entrySet().iterator()}" />
-			<while condition="#{#customFieldMapIterator.hasNext()}">
-				<var name="customFieldMapElement" value="#{#customFieldMapIterator.next()}" />
-				<var name="customFieldMapKey" value="#{#customFieldMapElement.getKey()}" />
-				<var name="customFieldMapValue" value="#{#customFieldMapElement.getValue()}" />
-				<log level="info" value="customFieldMapElement : #{#customFieldMapElement.toString()}" />
-				<if condition="#{#customFieldMapKey != null and #customFieldMapValue != null}">
-					<startTag name="CustomField">
-						<attribute name="name" value="#{#customFieldMapKey}" />
-						<attribute name="value" value="#{#customFieldMapValue.replaceAll('&quot;','').replaceAll('&amp;', '').replaceAll('\n', ' ')}" />
-					</startTag>
-					<endTag name="CustomField" />
-				</if>
-			</while>
-			<!-- AE-1476 | Store Shopify order tags in Custom Field on SO level | pickrr -->
-			<if condition="#{#saleOrderJson.get('tags') != null and !#saleOrderJson.get('tags').isJsonNull()}">
-				<var name="tags" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderJson, 'tags')}" />
-				<startTag name="CustomField">
-					<attribute name="name" value="ShopifyTags" />
-					<attribute name="value" value="#{#tags}" />
-				</startTag>
-				<endTag name="CustomField" />
-			</if>
-			<endTag name="CustomFields" />
-			<catch>
-				<log level="info" value="#{#TAG} Invalid format for Additional Custom Fields MAPPING config parameter" />
-			</catch>
-		</try>
+	<var name="SHOPIFY_MS_BASE_URL" value="https://3b03-103-248-87-34.in.ngrok.io/shopify" />
 
+	<method name="prepareGetWsSaleOrderRequestBody">
+		<var name="getWsSaleOrderRequestMap" value="#{new java.util.HashMap()}" />
+		<var name="configurationParameters" value="#{new java.util.HashMap()}" />
+		<var name="connectorParameters" value="#{new java.util.HashMap()}" />
+
+		<var value="#{#configurationParameters.put('applicableProvinceCodes', #applicableProvinceCodes)}" />
+		<var value="#{#configurationParameters.put('stateCodeRequired', #stateCodeRequired)}" />
+		<var value="#{#configurationParameters.put('customFieldsCustomization', #customFieldsCustomization)}" />
+		<var value="#{#configurationParameters.put('enablePOS', #enablePOS)}" />
+
+		<var value="#{#connectorParameters.put('apiKey', #apiKey)}" />
+		<var value="#{#connectorParameters.put('hostname', #hostname)}" />
+		<var value="#{#connectorParameters.put('password', #password)}" />
+		<var value="#{#connectorParameters.put('accessToken', #accessToken)}" />
+		<var value="#{#connectorParameters.put('prefix', #prefix)}" />
+
+		<var value="#{#getWsSaleOrderRequestMap.put('orderId', #saleOrderCode)}" />
+		<var value="#{#getWsSaleOrderRequestMap.put('order', T(com.unifier.core.utils.JsonUtils).jsonToMap(#saleOrderDetailElement))}" />
+		<var value="#{#getWsSaleOrderRequestMap.put('configurationParameters', #configurationParameters)}" />
+		<var value="#{#getWsSaleOrderRequestMap.put('connectorParameters', #connectorParameters)}" />
+
+		<var name="getWsSaleOrderRequestBody" value="#{T(com.unifier.core.utils.JsonUtils).objectToString(#getWsSaleOrderRequestMap, true)}" />
+		<log level="info" value="getWsSaleOrderRequestBody: #{#getWsSaleOrderRequestBody}" />
 	</method>
 
-	<method name="addAddressDetail">
-		<!-- name = firstName + lastName -->
-		<var name="customerName" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'first_name')} #{T(com.unifier.core.utils.StringUtils).getNotNullValue(T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'last_name'))}" />
-		<!-- Removing any character which lies beyond the basic multilingual plane. Eg: Emojis -->
-		<var name="customerName" value="#{#customerName.replaceAll('[^\u0000-\uffff]', '')}" />
-		<var name="name" value="#{#customerName}" />
-		<!-- Company  name -->
-		<try>
-			<var name="company" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'company')}" />
-			<if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#company)}">
-				<var name="company" value="#{#company.replaceAll(&quot;\P{Print}&quot;, &quot;&quot;)}" />
-				<else>
-					<var name="company" value="" />
-				</else>
-			</if>
-			<catch>
-				<var name="company" value="" />
-			</catch>
-		</try>
-		<!-- Address line1 = companyName + addressLine1 -->
+	<method name="prepareGetWsSaleOrderRequestHeaders">
+		<var name="tenantCode" value="#{T(com.uniware.core.utils.UserContext).current().tenant.code}" />
 
+		<var name="getWsSaleOrderRequestHeaders" value="#{new java.util.HashMap()}" />
+		<var value="#{#getWsSaleOrderRequestHeaders.put('hostname', #hostname )}" />
+		<var value="#{#getWsSaleOrderRequestHeaders.put('location_id', #locationId )}" />
+		<var value="#{#getWsSaleOrderRequestHeaders.put('username', #apiKey )}" />
+		<var value="#{#getWsSaleOrderRequestHeaders.put('password', #password )}" />
+		<var value="#{#getWsSaleOrderRequestHeaders.put('tenant_code', #tenantCode )}" />
+		<var value="#{#getWsSaleOrderRequestHeaders.put('location_id', #locationId )}" />
+		<var value="#{#getWsSaleOrderRequestHeaders.put('TenantCode', #tenantCode )}" />
+		<var value="#{#getWsSaleOrderRequestHeaders.put('ChannelCode', #channel.code )}" />
+		<var value="#{#getWsSaleOrderRequestHeaders.put('SourceCode', #channel.sourceCode )}" />
+		<var value="#{#getWsSaleOrderRequestHeaders.put('Content-Type', 'application/json' )}" />
 
-		<try>
-			<!-- ! we may encounter IndexOutOfBoundsException -->
-			<var name="addressLine1" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'address1').replaceAll(&quot;\P{Print}&quot;, &quot;&quot;)}" />
-			<catch>
-				<var name="addressLine1" value="" />
-			</catch>
-		</try>
+		<log level="info" value="getWsSaleOrderRequestHeaders: #{#getWsSaleOrderRequestHeaders.toString()}" />
+	</method>
 
+	<method name="doGetWsSaleOrderRequest">
+		<http method="POST" url="#{#SHOPIFY_MS_BASE_URL}/ws-sale-order" var="getWsSaleOrderResponse" fetchStatusCode="true">
+			<headers map="#{#getWsSaleOrderRequestHeaders}" />
+			<body>#{#getWsSaleOrderRequestBody}</body>
+		</http>
 
-		<var name="addressLine1" value="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#company)? (#company +', '+ #addressLine1) : #addressLine1}" />
-		<!-- Address line2 -->
-		<try>
-			<!-- ! we may encounter IndexOutOfBoundsException -->
-			<var name="addressLine2" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'address2')}" />
-			<catch>
-				<var name="addressLine2" value="" />
-			</catch>
-		</try>
-		<if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#addressLine2)}">
-			<try>
-				<var name="addressLine2" value="#{#addressLine2.replaceAll(&quot;\P{Print}&quot;, &quot;&quot;)}" />
-				<catch>
-					<var name="addressLine2" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'address2')}" />
-				</catch>
-			</try>
-		</if>
+		<log level="info" value="getWsSaleOrderResponse: #{#getWsSaleOrderResponse}" />
+	</method>
 
-		<!-- pincode [contains only letters and digit ] -->
-		<var name="pincode" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'zip')}" />
-		<var name="pincode" value="#{#pincode != null ? T(com.unifier.core.utils.StringUtils).removeNonWordChars(#pincode) : null}" />
-		<var name="city" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'city')}" />
-		<var name="state" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'province')}" />
-		<var name="country" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'country')}" />
-		<var name="country_code" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'country_code')}" />
-
-		<!-- if stateCodeRequired false make city as state else work as pervious -->
-		<log level="debug" value="#{#TAG} stateCodeRequired : #{#stateCodeRequired}" />
-		<if condition="#{T(com.unifier.core.utils.StringUtils).isBlank(#state) and !#stateCodeRequired}">
-			<var name="state" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'city')}" />
-			<else>
-				<!-- If state is blank and country is INDIA than get state by hitting flipkart API -->
-				<if condition="#{T(com.unifier.core.utils.StringUtils).isBlank(#state)} and #country.equalsIgnoreCase('india')}">
-					<http method="post" url="https://www.flipkart.com/xhr/getCityAndStateForPinCode" var="getStateResponse">
-						<param name="pincode" value="#{#pincode}" />
-					</http>
-					<var name="getStateJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#getStateResponse)}" />
-					<var name="state" value="#{#getStateJson.get('data') != '' ? #getStateJson.get('data').get('state').getAsString() : ''}" />
-				</if>
-			</else>
-		</if>
-
-		<if condition="#{#country_code != null and T(com.unifier.core.utils.StringUtils).equalsIngoreCaseAny(#country_code, 'SA')}">
-			<log level="info" value="#{#TAG} Harcoding State SA" />
-			<var name="state" value="SA-SA" />
-			<var name="city" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'city')},#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'province')}" />
-			<var name="addressLine1" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'address1')}" />
-			<log level="info" value="Final Address1 = #{#addressLine1}" />
-			<else>
-				<log level="info" value="#{#TAG} Non-SA SaleOrder" />
-			</else>
-		</if>
-
-		<if condition="#{#country_code != null and T(com.unifier.core.utils.StringUtils).equalsIngoreCaseAny(#country_code, 'SG')}">
-			<log level="info" value="#{#TAG} Harcoding State SG" />
-			<var name="state" value="SG-SG" />
-			<var name="city" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'city')}" />
-			<else>
-				<log level="info" value="#{#TAG} Non-SG SaleOrder" />
-			</else>
-		</if>
-
-		<!-- Phone Number. If phoneNumber is empty that set it to default "9999999999" -->
-		<var name="phone" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'phone')}" />
-		<var name="phone" value="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#phone) ? #phone : '9999999999'}" />
-		<!-- country_code -->
-		<var name="countryCode" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#address, 'country_code')}" />
-		<if condition="#{'IN'.equalsIgnoreCase(#countryCode)}">
-			<if condition="#{#phone.length() >= 3}">
-				<if condition="#{'+91'.equalsIgnoreCase(#phone.substring(0,3))}">
-					<var name="phone" value="#{#phone.substring(3)}" />
-				</if>
-			</if>
-		</if>
-		<!-- map above field to uniware field -->
-		<startTag name="Address">
-			<attribute name="id" value="#{#addressId}" />
+	<method name="prepareCustomFieldXML">
+		<startTag name="CustomFields" />
+		<startTag name="CustomField">
+			<attribute name="name" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#customField, 'name')}" />
+			<attribute name="value" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#customField, 'value')}" />
 		</startTag>
-		<valueTag name="Name" value="#{#name}" cdata="true" />
-		<valueTag name="AddressLine1" value="#{#addressLine1}" cdata="true" />
-		<valueTag name="AddressLine2" value="#{#addressLine2}" cdata="true" />
-		<valueTag name="City" value="#{#city}" cdata="true" />
-		<valueTag name="State" value="#{#state}" cdata="true" />
-		<valueTag name="Pincode" value="#{#pincode}" cdata="true" />
-		<valueTag name="Country" value="#{#country}" cdata="true" />
-		<valueTag name="Phone" value="#{#phone}" cdata="true" />
+		<endTag name="CustomField" />
+		<endTag name="CustomFields" />
+	</method>
+
+	<method name="prepareAddressXML">
+		<startTag name="Address">
+			<attribute name="id" value="#{#address.get('id').getAsString()}" />
+		</startTag>
+		<valueTag name="Name" value="#{#address.get('name').getAsString()}" cdata="true" />
+		<valueTag name="AddressLine1" value="#{#address.get('addressLine1').getAsString()}" cdata="true" />
+		<valueTag name="AddressLine2" value="#{#address.get('addressLine2').getAsString()}" cdata="true" />
+		<valueTag name="City" value="#{#address.get('city').getAsString()}" cdata="true" />
+		<valueTag name="State" value="#{#address.get('state').getAsString()}" cdata="true" />
+		<valueTag name="Pincode" value="#{#address.get('pincode').getAsString()}" cdata="true" />
+		<valueTag name="Country" value="#{#address.get('country').getAsString()}" cdata="true" />
+		<valueTag name="Phone" value="#{#address.get('phone').getAsString()}" cdata="true" />
 		<endTag name="Address" />
 	</method>
 
-	<method name="addSaleOrderItem">
+	<method name="prepareSaleOrderItemXML">
 		<startTag name="SaleOrderItem" />
-		<valueTag name="Code" value="#{#saleOrderItemCode}" />
-		<valueTag name="ChannelSaleOrderItemCode" value="#{#channelSaleOrderItemCode}" />
-		<valueTag name="ItemSKU" value="#{#itemSkuCode}" cdata="true" />
-		<valueTag name="ChannelProductId" value="#{#channelProductId}" cdata="true" />
-		<valueTag name="ItemName" value="#{#itemName}" cdata="true" />
-		<valueTag name="ShippingMethodCode" value="STD" />
-		<var name="giftMessage" value="#{#giftMessage.replaceAll('[^\u0000-\uffff]', '')}" />
-		<!-- Added from v1.1 -->
-		<if condition="#{!T(com.unifier.core.utils.StringUtils).isBlank(#giftMessage)}">
-			<valueTag name="GiftMessage" value="#{#giftMessage}" cdata="true" />
-		</if>
-		<!-- Modified as a part of AE-1400 -->
-
-		<var name="productPrice" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#itemJson.get('price').getAsString())}" />
-		<var name="sellingPrice" value="#{#productPrice.subtract(#itemDiscount).setScale(2, T(java.math.RoundingMode).HALF_EVEN)}" />
-		<if condition="#{T(com.unifier.core.utils.NumberUtils).lessThan(#sellingPrice, T(java.math.BigDecimal).ZERO)}">
-			<var name="sellingPrice" value="0" />
-		</if>
-		<if condition="#{#hasItemLevelDiscounts and !#hasOrderLevelDiscount}">
-			<valueTag name="Discount" value="#{#itemDiscount}" />
-			<log level="info" value="#{'Discount : ' + #itemDiscount}" />
-		</if>
-		<valueTag name="TotalPrice" value="#{#sellingPrice}" />
-		<log level="info" value="#{'SP : ' + #sellingPrice}" />
-		<valueTag name="SellingPrice" value="#{#sellingPrice}" />
-
-		<if condition="#{#saleOrderJson.get('discount_codes') != null and !#saleOrderJson.get('discount_codes').isJsonNull()}">
-			<var name="discountCodeIterator" value="#{#saleOrderJson.get('discount_codes').getAsJsonArray().iterator()}" />
-			<if condition="#{#discountCodeIterator.hasNext()}">
-				<var name="voucherCodeElement" value="#{#discountCodeIterator.next()}" />
-				<var name="voucherCode" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#voucherCodeElement, 'code')}" />
-				<if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#voucherCode)}">
-					<if condition="#{#voucherCode.length() > 45 }">
-						<var name="voucherCode" value="#{#voucherCode.substring(0,45)}" />
-					</if>
-					<valueTag name="VoucherCode" value="#{#voucherCode}" cdata="true" />
-				</if>
-			</if>
-		</if>
-
-		<valueTag name="PacketNumber" value="#{#packetNumberForItem}" />
-		<!-- AE 1317 -->
-		<if condition="#{'DOMESTIC'.equalsIgnoreCase(#splitShipmentCondition) and 'IN'.equalsIgnoreCase(#countryCode)}">
-			<var name="currentPacketNo" value="#{#currentPacketNo+1}" />
-			<var name="packetNumberForItem" value="#{#currentPacketNo}" />
-		</if>
+		<valueTag name="Code" value="#{#saleOrderItem.get('code').getAsString()}" />
+		<valueTag name="ChannelSaleOrderItemCode" value="#{#saleOrderItem.get('channelSaleOrderItemCode').getAsString()}" />
+		<valueTag name="ItemSKU" value="#{#saleOrderItem.get('itemSku').getAsString()}" cdata="true" />
+		<valueTag name="ChannelProductId" value="#{#saleOrderItem.get('channelProductId').getAsString()}" cdata="true" />
+		<valueTag name="ItemName" value="#{#saleOrderItem.get('itemName').getAsString()}" cdata="true" />
+		<valueTag name="ShippingMethodCode" value="#{#saleOrderItem.get('shippingMethodCode').getAsString()}" />
+		<valueTag name="GiftMessage" value="#{#saleOrderItem.get('giftMessage').getAsString()}" cdata="true" />
+		<valueTag name="Discount" value="#{#saleOrderItem.get('discount').getAsBigDecimal()}" />
+		<valueTag name="TotalPrice" value="#{#saleOrderItem.get('totalPrice').getAsBigDecimal()}" />
+		<valueTag name="SellingPrice" value="#{#saleOrderItem.get('sellingPrice').getAsBigDecimal()}" />
+		<valueTag name="VoucherCode" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderItem, 'voucherCode')}" cdata="true" />
+		<valueTag name="PacketNumber" value="#{#saleOrderItem.get('packetNumber').getAsInt()}" />
 		<endTag name="SaleOrderItem" />
 	</method>
 
-	<method name="addSaleOrder">
+	<method name="prepareCreateSaleOrderRequestXML">
 		<startTag name="CreateSaleOrderRequest">
 			<attribute name="xmlns" value="http://uniware.unicommerce.com/services/" />
 		</startTag>
 		<startTag name="SaleOrder" />
-		<valueTag name="Code" value="#{#saleOrderCode}" />
-		<valueTag name="CashOnDelivery" value="#{#cashOnDelivery}" />
-		<log level="debug" value="#{#TAG} prefix: #{#prefix}" />
-		<if condition="#{'TRUE'.equalsIgnoreCase(#prefix)}">
-			<var name="displayOrderCode" value="#{#saleOrderJson.get('name').getAsString()}" />
-			<else>
-
-				<var name="displayOrderCode" value="#{#saleOrderJson.get('order_number').getAsString()}" />
-			</else>
-		</if>
-		<valueTag name="DisplayOrderCode" value="#{#displayOrderCode}" />
-		<if condition="#{!#saleOrderJson.get('checkout_id').isJsonNull()}">
-			<try>
-				<var name="checkoutId" value="#{#saleOrderJson.get('checkout_id').getAsString()}" />
-				<var name="additionalInfoMap" value="#{new java.util.HashMap()}" />
-				<var value="#{#additionalInfoMap.put('checkoutId', #checkoutId)}" />
-				<var name="additionalInfoMap" value="#{T(com.unifier.core.utils.JsonUtils).objectToString(#additionalInfoMap)}" />
-				<valueTag name="AdditionalInfo" value="#{#additionalInfoMap}" />
-				<valueTag name="TransactionId" value="#{#saleOrderJson.get('checkout_id').getAsString()}" />
-				<var name="paymentGatewayNamesArray" value="#{#saleOrderJson.get('payment_gateway_names').getAsJsonArray()}" />
-				<if condition="#{#paymentGatewayNamesArray.size() gt 0}">
-					<valueTag name="PaymentMode" value="#{#paymentGatewayNamesArray.get(#paymentGatewayNamesArray.size()-1).getAsString()}" />
-				</if>
-
-				<valueTag name="TransactionDate" value="#{#saleOrderJson.get('created_at').getAsString()}" />
-				<!-- Added from testPaymentDetails 
-                <valueTag name="AmountPaid" value="#{#saleOrderJson.get('shopMoney').get('amount').getAsString()}" /> -->
-				<catch>
-					<log level="info" value="#{#TAG} can't save AdditionalInfo into Map" />
-				</catch>
-			</try>
-		</if>
-		<var name="shopifyDatePattern" value="yyyy-MM-dd'T'HH:mm:ss" />
-		<var name="uniwareDatePattern" value="yyyy-MM-dd'T'HH:mm:ss" />
-		<var name="shopifyDate" value="#{T(com.unifier.core.utils.DateUtils).stringToDate(#saleOrderJson.get('created_at').getAsString(), #shopifyDatePattern)}" />
-		<log level="debug" value="#{#TAG} created_at : #{#shopifyDate.toString()}" />
-		<valueTag name="DisplayOrderDateTime" value="#{T(com.unifier.core.utils.DateUtils).dateToString(#shopifyDate, #uniwareDatePattern)}+05:30" cdata="true" />
-		<!-- ? QUERY : Shouldn't Customer-Phone be used as NotificationMobile? -->
-		<!-- ? QUERY : Shouldn't NotificationMobile and Email belong to same object i.e. CustomerDefaultAddress/BillingAddress/ShippingAddress? -->
-		<var name="notificationMobile" value="#{T(com.unifier.core.utils.ValidatorUtils).getValidMobileOrNull(T(com.unifier.core.utils.JsonUtils).getAsString(#billingAddress, 'phone'))}" />
-		<if condition="#{#notificationMobile != null}">
-			<valueTag name="NotificationMobile" value="#{#notificationMobile}" />
-		</if>
-		<valueTag name="NotificationEmail" value="#{#saleOrderJson.get('email').getAsString()}" cdata="true" />
-
-		<valueTag name="CurrencyCode" value="#{#saleOrderJson.get('currency').getAsString()}" />
-
-
-		<if condition="#{#saleOrderJson.get('note_attributes') != null and !#saleOrderJson.get('note_attributes').isJsonNull()}">
-			<var name="noteAttributes" value="#{#saleOrderJson.get('note_attributes').getAsJsonArray()}" />
-			<var name="noteAttributesIterator" value="#{#noteAttributes.iterator()}" />
-			<while condition="#{#noteAttributesIterator.hasNext()}">
-				<var name="noteAttribute" value="#{#noteAttributesIterator.next()}" />
-				<var name="noteAttributeName" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#noteAttribute, 'name')}" />
-				<if condition="#{#noteAttributeName.equalsIgnoreCase('CustomerGSTIN')}">
-					<var name="customerGSTIN" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#noteAttribute, 'value')}" />
-					<valueTag name="CustomerGSTIN" value="#{#customerGSTIN}" />
-					<break />
-				</if>
-			</while>
-		</if>
-
-		<var name="currentTotalDiscount" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#saleOrderJson.get('current_total_discounts').getAsString())}" />
-		<var name="discount" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#saleOrderJson.get('total_discounts').getAsString())}" />
-		<log level="info" value="#{#TAG} Total discount : #{#discount} , Current total discount : #{#currentTotalDiscount}" />
-
-		<var name="shippingChargesIterator" value="#{#saleOrderJson.get('shipping_lines').getAsJsonArray().iterator()}" />
-		<var name="shippingCharges" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(0.00)}" />
-		<if condition="#{#shippingChargesIterator.hasNext()}">
-			<var name="charge" value="#{#shippingChargesIterator.next()}" />
-			<var name="title" value="#{#charge.get('title').getAsString()}" />
-			<if condition="#{#title.contains('Cash on Delivery')}">
-				<var name="codCharges" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#charge.get('price').getAsString())}" />
-				<else>
-					<var name="shippingCharges" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#charge.get('price').getAsString())}" />
-				</else>
-			</if>
-		</if>
-		<valueTag name="TotalShippingCharges" value="#{#shippingCharges}" />
-		<valueTag name="TotalCashOnDeliveryCharges" value="#{#codCharges!=null?#codCharges: T(com.unifier.core.utils.NumberUtils).newBigDecimal(0.00)}" />
-		<var name="prepaidAmount" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#giftDiscount)}" />
-		<var name="subtotal" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#saleOrderJson.get('total_line_items_price').getAsString())}" />
-		<var name="totalOrderAmount" value="#{#shippingCharges.add(#subtotal)}" />
-		<if condition="#{(#prepaidAmount.add(#discount)) &gt; #totalOrderAmount}">
-			<var name="prepaidAmount" value="#{#totalOrderAmount.subtract(#discount)}" />
-		</if>
-
-		<valueTag name="TotalPrepaidAmount" value="#{#prepaidAmount}" />
-		<log level="debug" value="#{#TAG} TOTAL PREPAID : #{#prepaidAmount}" />
-		<var name="customerName" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#billingAddress, 'first_name')} #{T(com.unifier.core.utils.StringUtils).getNotNullValue(T(com.unifier.core.utils.JsonUtils).getAsString(#billingAddress, 'last_name'))}" />
+		<valueTag name="Code" value="#{#wsSaleOrder.get('code').getAsString()}" />
+		<valueTag name="CashOnDelivery" value="#{#wsSaleOrder.get('cashOnDelivery').getAsBoolean()}" />
+		<valueTag name="DisplayOrderCode" value="#{#wsSaleOrder.get('displayOrderCode').getAsString()}" />
+		<valueTag name="AdditionalInfo" value="#{#wsSaleOrder.get('additionalInfo').getAsString()}" />
+		<valueTag name="TransactionId" value="#{#wsSaleOrder.get('transactionId').getAsString()}" />
+		<valueTag name="PaymentMode" value="#{#wsSaleOrder.get('paymentMode').getAsString()}" />
+		<valueTag name="TransactionDate" value="#{#wsSaleOrder.get('transactionDate').getAsString()}" />
+		<valueTag name="DisplayOrderDateTime" value="#{#wsSaleOrder.get('displayOrderDateTime').getAsString()}" cdata="true" />
+		<valueTag name="NotificationMobile" value="#{#wsSaleOrder.get('notificationMobile').getAsString()}" />
+		<valueTag name="NotificationEmail" value="#{#wsSaleOrder.get('notificationEmail').getAsString()}" cdata="true" />
+		<valueTag name="CurrencyCode" value="#{#wsSaleOrder.get('currencyCode').getAsString()}" />
+		<valueTag name="CustomerGSTIN" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#wsSaleOrder, 'customerGSTIN')}" />
+		<valueTag name="TotalShippingCharges" value="#{#wsSaleOrder.get('totalShippingCharges').getAsBigDecimal()}" />
+		<valueTag name="TotalCashOnDeliveryCharges" value="#{#wsSaleOrder.get('totalCashOnDeliveryCharges').getAsBigDecimal()}" />
+		<valueTag name="TotalPrepaidAmount" value="#{#wsSaleOrder.get('totalPrepaidAmount').getAsBigDecimal()}" />
 
 		<startTag name="Addresses" />
-
-		<invoke method="addAddressDetail">
-			<param name="addressId" value="1" />
-			<param name="address" value="#{#billingAddress}" />
-		</invoke>
-
-		<if condition="#{#billingAddress != #shippingAddress}">
-			<invoke method="addAddressDetail">
-				<param name="addressId" value="2" />
-				<param name="address" value="#{#shippingAddress}" />
+		<var name="addressesItr" value="#{#wsSaleOrder.get('addresses').getAsJsonArray().iterator()}" />
+		<while condition="#{#addressesItr.hasNext()}">
+			<var name="address" value="#{#addressesItr.next()}" />
+			<invoke method="prepareAddressXML">
+				<param name="address" value="#{#address}" />
 			</invoke>
-		</if>
+		</while>
 		<endTag name="Addresses" />
 
 		<startTag name="BillingAddress">
-			<attribute name="ref" value="1" />
+			<attribute name="ref" value="#{#wsSaleOrder.get('billingAddress').get('referenceId').getAsString()}" />
 		</startTag>
 		<endTag name="BillingAddress" />
 
 		<startTag name="ShippingAddress">
-			<attribute name="ref" value="#{#billingAddress != #shippingAddress ? '2' : '1'}" />
+			<attribute name="ref" value="#{#wsSaleOrder.get('shippingAddress').get('referenceId').getAsString()}" />
 		</startTag>
 		<endTag name="ShippingAddress" />
 
 		<startTag name="SaleOrderItems" />
-		<var name="lineItemsIterator" value="#{#saleOrderJson.get('line_items').getAsJsonArray().iterator()}" />
-		<var name="itemToPacketNumberMap" value="#{new java.util.LinkedHashMap()}" />
-		<var name="currentPacketNo" value="#{1}" />
-		<var name="CYOBFlag" value="#{false}" />
-		<!-- review left here -->
 
-		<!-- AE-1400 -->
-		<var name="hasOrderLevelDiscount" value="#{false}" />
-		<var name="hasItemLevelDiscounts" value="#{false}" />
-		<log level="info" value="#{'has order level discount :' + #hasOrderLevelDiscount}" />
-		<var name="discountApplicationsIterator" value="#{#saleOrderJson.get('discount_applications').getAsJsonArray().iterator()}" />
-		<while condition="#{#discountApplicationsIterator.hasNext()}">
-			<var name="discountItemJson" value="#{#discountApplicationsIterator.next()}" />
-			<if condition="#{#discountItemJson.get('target_selection') != null and !#discountItemJson.get('target_selection').isJsonNull()}">
-				<var name="discountTargetSelection" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#discountItemJson, 'target_selection')}" />
-				<if condition="#{#discountTargetSelection.equals('all')}">
-					<var name="hasOrderLevelDiscount" value="#{true}" />
-					<log level="info" value="#{'has order level discount :' + #hasOrderLevelDiscount}" />
-					<else>
-						<var name="hasItemLevelDiscounts" value="#{true}" />
-						<log level="info" value="#{'has item level discounts : ' + #hasItemLevelDiscounts}" />
-					</else>
-				</if>
-			</if>
-		</while>
-
-		<while condition="#{#lineItemsIterator.hasNext()}">
-			<var name="itemJson" value="#{#lineItemsIterator.next()}" />
-			<log level="info" value="#{'has item level discounts : ' + #hasItemLevelDiscounts}" />
-			<var name="itemDiscount" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal('0')}" />
-			<if condition="#{!#hasOrderLevelDiscount}">
-				<if condition="#{#itemJson.get('discount_allocations') != null and !#itemJson.get('discount_allocations').isJsonNull()}">
-					<log level="info" value="checkpoint 1" />
-					<var name="discountAllocationsIterator" value="#{#itemJson.get('discount_allocations').getAsJsonArray().iterator()}" />
-					<if condition="#{#discountAllocationsIterator.hasNext()}">
-						<log level="info" value="checkpoint 2" />
-						<var name="discountAllocationItem" value="#{#discountAllocationsIterator.next()}" />
-						<var name="discountPrice" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#discountAllocationItem, 'amount')}" />
-						<log level="info" value="#{#discountPrice}" />
-						<if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#discountPrice)}">
-							<log level="info" value="checkpoint 3" />
-
-							<var name="itemQuantity" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#itemJson.get('quantity').getAsString())}" />
-							<var name="itemDiscount" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#discountPrice).divide(#itemQuantity, 2 ,T(java.math.RoundingMode).HALF_EVEN)}" />
-							<log level="info" value="#{'discount on item : ' + #itemDiscount}" />
-						</if>
-					</if>
-				</if>
-			</if>
-
-			<if condition="#{#itemJson.get('fulfillable_quantity').getAsInt() &gt; 0}">
-				<var name="itemName" value="#{#itemJson.get('name').getAsString()}" />
-				<if condition="#{#itemName.length() &gt; 199}">
-					<var name="itemName" value="#{#itemName.substring(0, 199)}" />
-				</if>
-				<var name="itemSkuCode" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#itemJson, 'sku')}" />
-				<var name="channelProductId" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#itemJson, 'product_id')}" />
-				<var name="variantId" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#itemJson, 'variant_id')}" />
-
-				<!-- AE-1317-->
-				<var name="splitShipmentConditionMap" value="#{new java.util.HashMap()}" />
-				<var value="#{#splitShipmentConditionMap.put('splitShipmentCondition',#splitShipmentCondition)}" />
-				<try>
-					<invoke method="getTenantSpecificSplitShipment" script="shopifyCustomizationsScript">
-						<param name="splitShipmentConditionMap" value="#{#splitShipmentConditionMap}" />
-					</invoke>
-					<catch></catch>
-				</try>
-				<var name="splitShipmentCondition" value="#{#splitShipmentConditionMap.get('splitShipmentCondition')}" />
-
-				<!-- AE-956 AE-958, Split Shipment on FULFILLMENT Basis and Custom Field basis -->
-				<log level="info" value="splitShipmentCondition : #{#splitShipmentCondition}" />
-				<if condition="#{'FULFILLMENT'.equalsIgnoreCase(#splitShipmentCondition)}">
-					<var name="itemFulfillmentStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#itemJson, 'fulfillment_status')}" />
-					<if condition="#{'FULFILLED'.equalsIgnoreCase(#itemFulfillmentStatus)}">
-						<var name="packetNumberForItem" value="2" />
-						<else>
-							<var name="packetNumberForItem" value="1" />
-						</else>
-					</if>
-					<else>
-						<if condition="#{'CUSTOM'.equalsIgnoreCase(#splitShipmentCondition)}">
-							<!-- Logic for CYOB-UDF -->
-							<var name="CYOBFlag" value="#{true}" />
-							<else>
-								<!-- AE-1317 -->
-								<if condition="#{'DOMESTIC'.equalsIgnoreCase(#splitShipmentCondition) and 'IN'.equalsIgnoreCase(#countryCode)}">
-									<var name="packetNumberForItem" value="#{#currentPacketNo}" />
-									<else>
-										<if condition="#{#channel.packageType == 'FIXED'}">
-											<var name="packetNumberForItem" value="1" />
-											<else>
-												<var name="packetNumberForItem" value="0" />
-											</else>
-										</if>
-									</else>
-								</if>
-							</else>
-						</if>
-					</else>
-				</if>
-				<var name="giftMessage" value="" />
-				<var name="propertiesIterator" value="#{#itemJson.get('properties').getAsJsonArray().iterator()}" />
-				<!--
-				<if condition="#{#propertiesIterator.hasNext()}">
-					<var name="giftMessage" value="#{#itemJson.get('properties').toString()}" />
-				</if>
-				-->
-
-				<while condition="#{#propertiesIterator.hasNext()}">
-					<var name="propertyItem" value="#{#propertiesIterator.next()}" />
-					<try>
-						<var name="propertyItemName" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#propertyItem, 'name')}" />
-						<var name="propertyItemValue" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#propertyItem, 'value')}" />
-						<!--
-                        <if condition="#{'NOTE'.equalsIgnoreCase(#propertyItemName)}">
-                            <var name="giftMessage" value="#{#propertyItemValue}" />
-                        </if> -->
-						<if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#giftMessage)}">
-							<var name="giftMessage" value="#{#giftMessage+','+#propertyItemName+':'+#propertyItemValue}" />
-							<else>
-								<var name="giftMessage" value="#{#propertyItemName+':'+#propertyItemValue}" />
-							</else>
-						</if>
-
-						<if condition="#{#CYOBFlag}">
-							<if condition="#{'_BID'.equalsIgnoreCase(#propertyItemName)}">
-								<var name="boxID" value="#{#propertyItemValue}" />
-								<if condition="#{#boxID != null}">
-									<if condition="#{#itemToPacketNumberMap.get(#boxID) == null}">
-										<var value="#{#itemToPacketNumberMap.put(#boxID, #currentPacketNo)}" />
-										<var name="currentPacketNo" value="#{#currentPacketNo + 1}" />
-									</if>
-									<var name="packetNumberForItem" value="#{#itemToPacketNumberMap.get(#boxID)}" />
-								</if>
-							</if>
-						</if>
-						<catch>
-							<log level="info" value="#{#TAG} Skipping propertyItem" />
-						</catch>
-					</try>
-				</while>
-				<!-- BOX-ID Logic Here -->
-				<if condition="#{#packetNumberForItem == null}">
-					<var name="packetNumberForItem" value="0" />
-				</if>
-
-				<if condition="#{#giftMessage.length() &gt; 256}">
-					<var name="giftMessage" value="#{#giftMessage.substring(0, 256)}" />
-				</if>
-
-				<if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#variantId)}">
-					<var name="channelProductId" value="#{#channelProductId}-#{#variantId}" />
-				</if>
-				<if condition="#{T(com.unifier.core.utils.StringUtils).isBlank(#channelProductId)}">
-					<var name="channelProductId" value="#{#itemName}" />
-					<if condition="#{#channelProductId.length() &gt; 127}">
-						<var name="channelProductId" value="#{#channelProductId.substring(0, 127)}" />
-					</if>
-				</if>
-				<if condition="#{T(com.unifier.core.utils.StringUtils).isBlank(#itemSkuCode)}">
-					<var name="itemSkuCode" value="#{#channelProductId}" />
-				</if>
-				<var name="itemCount" value="#{0}" />
-				<var name="productQuantity" value="#{#itemJson.get('quantity').getAsInt()}" />
-				<var name="channelSaleOrderItemCode" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#itemJson, 'id')}" />
-				<if condition="#{#productQuantity == 1}">
-					<var name="saleOrderItemCode" value="#{#channelSaleOrderItemCode}" />
-					<invoke method="addSaleOrderItem" />
-					<else>
-						<while condition="#{#itemCount &lt; #productQuantity}">
-							<var name="saleOrderItemCode" value="#{#channelSaleOrderItemCode + '-' + #itemCount}" />
-							<invoke method="addSaleOrderItem" />
-							<var name="itemCount" value="#{#itemCount + 1}" />
-						</while>
-					</else>
-				</if>
-				<else>
-					<var name="itemName" value="#{#itemJson.get('name').getAsString()}" />
-					<log level="info" value="#{#TAG} Item Cancelled from Shopify : #{#itemName}" />
-				</else>
-			</if>
+		<var name="saleOrderItemsItr" value="#{#wsSaleOrder.get('saleOrderItems').getAsJsonArray().iterator()}" />
+		<while condition="#{#saleOrderItemsItr.hasNext()}">
+			<var name="saleOrderItem" value="#{#saleOrderItemsItr.next()}" />
+			<invoke method="prepareSaleOrderItemXML">
+				<param name="saleOrderItem" value="#{#saleOrderItem}" />
+			</invoke>
 		</while>
 		<endTag name="SaleOrderItems" />
-		<!-- Custom Fields Customizations | AE-968 -->
-
-		<!-- Added as a part of AE-1400 -->
-		<log level="info" value="#{#hasItemLevelDiscounts}" />
-		<if condition="#{!#hasItemLevelDiscounts or #hasOrderLevelDiscount}">
-			<valueTag name="TotalDiscount" value="#{#discount}" />
+		<if condition="#{#wsSaleOrder.get('totalDiscount') != null and !#wsSaleOrder.get('totalDiscount').isJsonNull()}" >
+			<valueTag name="TotalDiscount" value="#{#wsSaleOrder.get('totalDiscount').getAsBigDecimal()}" />
 		</if>
+		<var name="customFieldValuesItr" value="#{#wsSaleOrder.get('customFieldValues').getAsJsonArray().iterator()}" />
+		<while condition="#{#customFieldValuesItr.hasNext()}">
+			<var name="customField" value="#{#customFieldValuesItr.next()}" />
+			<invoke method="prepareCustomFieldXML">
+				<param name="customField" value="#{#customField}" />
+			</invoke>
+		</while>
 
-		<invoke method="populateCustomFields" />
 		<endTag name="SaleOrder" />
 		<endTag name="CreateSaleOrderRequest" />
 	</method>
 
-	<var name="authHeaders" value="#{#metadata.get('authHeaders')}" />
-	<var name="url" value="#{#metadata.get('url')}" />
-	<if condition="#{#authHeaders == null or #url == null}">
-		<var name="authHeadersAndUrl" value="#{new java.util.HashMap()}" />
-		<var name="channelConnectorParams" value="#{new java.util.HashMap()}" />
-		<var value="#{#channelConnectorParams.put('apiKey',#apiKey)}" />
-		<var value="#{#channelConnectorParams.put('password',#password)}" />
-		<var value="#{#channelConnectorParams.put('accessToken',#token)}" />
-		<var value="#{#channelConnectorParams.put('hostname',#hostname)}" />
-
-		<invoke method="getAuthHeadersAndUrl" script="shopifyUtils">
-			<param name="channelConnectorParams" value="#{#channelConnectorParams}" />
-			<param name="authHeadersAndUrl" value="#{#authHeadersAndUrl}" />
-		</invoke>
-
-		<var name="authHeaders" value="#{#authHeadersAndUrl.get('authHeaders')}" />
-		<var name="url" value="#{#authHeadersAndUrl.get('url')}" />
-	</if>
-
-	<log level="info" value="#{#TAG} url : #{#url}, authHeaders : #{#authHeaders.toString()}" />
-
-
-	<log level="debug" value="#{#TAG} SaleOrderDetailElement : #{#saleOrderDetailElement.toString()}" />
-	<var name="saleOrderJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#saleOrderDetailElement)}" />
-
-	<if condition="#{#applicableProvinceCodes != null}">
-		<var name="provinces" value="#{#applicableProvinceCodes.split(',')}" />
-		<var name="allowedProvinceCodesList" value="#{new java.util.ArrayList()}" />
-		<var value="#{#allowedProvinceCodesList.addAll(#provinces)}" />
-		<else>
-			<var name="allowedProvinceCodesList" value="#{null}" />
-		</else>
-	</if>
-
-	<var name="defaultAddress" value="#{#saleOrderJson.get('customer') != null ? #saleOrderJson.get('customer').get('default_address') : null}" />
-	<var name="shippingAddress" value="#{#saleOrderJson.get('shipping_address') != null ? #saleOrderJson.get('shipping_address') : #defaultAddress }" />
-	<var name="billingAddress" value="#{#saleOrderJson.get('billing_address') != null ? #saleOrderJson.get('billing_address') : #defaultAddress != null ? #defaultAddress: #shippingAddress}" />
-	<if condition="#{#billingAddress == null or #shippingAddress == null}">
-		<scriptError message="Billing/Shipping addresses not found" />
-	</if>
-
-	<var name="provinceCode" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#shippingAddress != null ? #shippingAddress : #billingAddress, 'province_code')}" />
-
-	<if condition="#{#allowedProvinceCodesList == null or #allowedProvinceCodesList.contains(#provinceCode)}">
-		<var name="saleOrderGraphqlId" value="#{#saleOrderJson.get('admin_graphql_api_id').getAsString()}" />
-		<var name="getSaleOrderTransactionsRequestBodyJson">
-			<![CDATA[
-            {"query":"query{order(id: \"#{#saleOrderGraphqlId}\") {transactions { amountSet { shopMoney { amount currencyCode } } gateway kind status receipt }}}"}
-            ]]>
-		</var>
-		<log level="info" value="#{#TAG} GetSaleOrderTransactionsRequestBodyJson : #{#getSaleOrderTransactionsRequestBodyJson}" />
-		<http url="#{#url}/graphql.json" method="post" var="getSaleOrderTransactionsResponse" cacheClient="false">
-			<header name="Content-Type" value="application/json" />
-			<headers map="#{#authHeaders}" />
-			<body>#{#getSaleOrderTransactionsRequestBodyJson}</body>
-		</http>
-		<log level="info" value="#{#TAG} GetSaleOrderTransactionsResponse : #{#getSaleOrderTransactionsResponse}" />
-
-		<var name="saleOrderTransactionsJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#getSaleOrderTransactionsResponse).get('data').get('order').get('transactions')}" />
-		<log level="info" value="#{#TAG} SaleOrderTransactionsArray : #{#saleOrderTransactionsJson.toString()}" />
-		<var name="saleOrderTransactionsIterator" value="#{#saleOrderTransactionsJson.getAsJsonArray().iterator()}" />
-		<var name="cashOnDelivery" value="#{false}" />
-		<var name="giftDiscount" value="#{0}" />
-		<var name="isOrderConfirmed" value="#{#saleOrderJson.get('confirmed').getAsBoolean()}" />
-		<var name="fulfillmentStatus" value="#{#saleOrderJson.get('fulfillment_status')}" />
-		<while condition="#{#saleOrderTransactionsIterator.hasNext()}">
-			<var name="saleOrderTransaction" value="#{#saleOrderTransactionsIterator.next()}" />
-			<var name="transactionStatus" value="#{#saleOrderTransaction.get('status').getAsString()}" />
-			<!-- For pending and successful transactions populate cashOnDelivery and giftDiscount-->
-			<var name="gateway" value="#{#saleOrderTransaction.get('gateway')}" />
-
-			<if condition="#{
-                !#gateway.isJsonNull() 
-                and 
-                (
-                    'PENDING'.equalsIgnoreCase(#transactionStatus) 
-                    or 
-                    'SUCCESS'.equalsIgnoreCase(#transactionStatus)
-                )}">
-
-				<!-- Checking COD and todo: good comment for draft order-->
-				<if condition="#{
-                    #gateway.getAsString().contains('COD') 
-                    or 
-                    #gateway.getAsString().toLowerCase().contains('cash on delivery') 
-                    or 
-                    #gateway.getAsString().toLowerCase().contains('cash_on_delivery') 
-                    or 
-                    (
-                        #syncDraftOrders =='true' 
-                        and 
-                        #gateway.getAsString().toLowerCase().contains('manual') 
-                        and 
-                        (
-                            #saleOrderJson.get('financial_status').isJsonNull() 
-                            or 
-                            !#saleOrderJson.get('financial_status').getAsString().toLowerCase().equals('paid')
-                        )
-                    )}">
-					<var name="cashOnDelivery" value="#{true}" />
+	<method name="handleGetWsSaleOrderResponse">
+		<if condition="#{#getWsSaleOrderResponseCode == 200}">
+			<var name="getWsSaleOrderResponseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#getWsSaleOrderResponse)}" />
+			<var name="responseStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#getWsSaleOrderResponseJson, 'status')}" />
+			<var name="responseMessage" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#getWsSaleOrderResponseJson, 'message')}" />
+			<var name="responseErrors" value="#{#getWsSaleOrderResponseJson.get('errors')}" />
+			<log level="info" value="responseStatus: #{#responseStatus}" />
+			<if condition="#{'success'.equals(#responseStatus)}">
+				<var name="responseStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#getWsSaleOrderResponseJson, 'status')}" />
+				<var name="wsSaleOrder" value="#{#getWsSaleOrderResponseJson.get('data')}" />
+				<if condition="#{#wsSaleOrder != null}">
+					<invoke method="prepareCreateSaleOrderRequestXML">
+						<param name="wsSaleOrder" value="#{#wsSaleOrder}" />
+					</invoke>
 					<else>
-						<var name="cashOnDelivery" value="#{false}" />
+						<log level="info" value="wsSaleOrder is null" />
 					</else>
 				</if>
-				<!-- Calculating giftDiscount -->
-				<var name="transactionKind" value="#{#saleOrderTransaction.get('kind').getAsString()}" />
-				<if condition="#{'gift_card'.equalsIgnoreCase(#gateway.getAsString()) and 'success'.equalsIgnoreCase(#transactionStatus)}">
-					<if condition="#{'REFUND'.equalsIgnoreCase(#transactionKind)}">
-						<var name="giftDiscount" value="#{#giftDiscount - #saleOrderTransaction.get('amountSet').get('shopMoney').get('amount').getAsDouble()}" />
-						<else>
-							<var name="giftDiscount" value="#{#saleOrderTransaction.get('amountSet').get('shopMoney').get('amount').getAsDouble() + #giftDiscount}" />
-						</else>
-					</if>
-				</if>
-				<if condition="#{#customFieldsCustomization != null and #customFieldsCustomization.contains('receiptJson')}">
-					<var name="receipt" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderTransaction, 'receipt')}" />
-					<if condition="#{#receipt != null}">
-						<var name="receipt" value="#{T(org.apache.commons.lang.StringEscapeUtils).unescapeJava(#receipt)}" />
-						<var name="receipt" value="#{#receipt.replaceAll('=>',':')}" />
-						<var name="receiptJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#receipt)}" />
-						<else>
-							<var name="receiptJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson('{}')}" />
-						</else>
-					</if>
-				</if>
-			</if>
-			<log level="info" value="#{#TAG} SaleOrderTransaction : #{#saleOrderTransaction.toString()}, giftDiscount: #{#giftDiscount}, cashOnDelivery : #{#cashOnDelivery}" />
-		</while>
-		<if condition="#{
-            #isOrderConfirmed
-            and 
-            (
-                #fulfillmentStatus.isJsonNull() 
-                or 
-                #fulfillmentStatus.getAsString().equals('null') 
-                or 
-                #fulfillmentStatus.getAsString().equals('partial')
-            )
-        }">
-			<!-- For COD orders or prepaid orders -->
-			<if condition="#{
-                #cashOnDelivery 
-                or 
-                (
-                    !#saleOrderJson.get('financial_status').isJsonNull() 
-                    and 
-                    'PAID'.equalsIgnoreCase(#saleOrderJson.get('financial_status').getAsString())
-                )}">
-
-				<!-- Create order-details -->
-				<invoke method="addSaleOrder" />
-
 				<else>
-					<!-- NOTE: Not throwing an error here, if scriptOutput is blank then order is skipped -->
-					<log level="info" value="#{#TAG} Skipping sale order #{#saleOrderCode}. CashOnDelivery : #{#cashOnDelivery}, Financial Status : #{#saleOrderJson.get('financial_status').getAsString()}" />
+					<log level="info" value="responseStatus: #{#responseStatus} is not success" />
 				</else>
 			</if>
 			<else>
-				<log level="info" value="#{#TAG} Skipping sale order #{#saleOrderCode}. Confirmed : #{#isOrderConfirmed} , Fulfillment Status : #{#fulfillmentStatus}}" />
+				<if condition="#{#getWsSaleOrderResponseCode == 400}">
+					<log level="info" value="Error(s) in request payload | responseMessage: #{#responseMessage} | responseErrors: #{#responseErrors}" />
+					<else>
+						<log level="info" value="Error fetching wsSaleOrder for #{#saleOrderCode}" />
+					</else>
+				</if>
 			</else>
 		</if>
-		<else>
-			<log level="info" value="#{#TAG} Skipping sale order #{#saleOrderCode}. ProvinceCode : #{#provinceCode} not allowed." />
-		</else>
-	</if>
+	</method>
 
+	<invoke method="prepareGetWsSaleOrderRequestBody" />
+	<invoke method="prepareGetWsSaleOrderRequestHeaders" />
+	<invoke method="doGetWsSaleOrderRequest">
+		<param name="getWsSaleOrderRequestBody" value="#{#getWsSaleOrderRequestBody}" />
+		<param name="getWsSaleOrderRequestHeaders" value="#{#getWsSaleOrderRequestHeaders}" />
+	</invoke>
+	<invoke method="handleGetWsSaleOrderResponse">
+		<param name="getWsSaleOrderResponse" value="#{#getWsSaleOrderResponse}" />
+		<param name="getWsSaleOrderResponseCode" value="#{#getWsSaleOrderResponseResponseCode}" />
+	</invoke>
 </scraper>
