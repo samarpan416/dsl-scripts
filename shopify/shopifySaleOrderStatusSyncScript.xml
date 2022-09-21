@@ -4,378 +4,123 @@
                     - saleOrder - code
                                 - saleOrderItems Set<SaleOrderItem> - code
       -->
-    <var name="TAG" value="[ShopifySaleOrderStatusSyncScript]" />
-    <var name="soiCodeToSoi" value="#{#saleOrder.getSaleOrderItemsMap()}" />
-
-    <!-- PARAMS :   saleOrderItems
-     -->
-    <method name="prepareChannelSoiCodeToSoiItems">
-        <!-- String <-> ArrayList -->
-        <var name="channelSoiCodeToSoiItems" value="#{new java.util.HashMap()}" />
-        <foreach collection="#{#saleOrderItems}" var="saleOrderItem">
-            <log level="info" value="#{#TAG} saleOrderItem.code : #{#saleOrderItem.code} , saleOrderItem.statusCode : #{#saleOrderItem.statusCode}" />
-
-            <var name="soiItems" value="#{#channelSoiCodeToSoiItems.get(#saleOrderItem.channelSaleOrderItemCode)}" />
-            <var name="isBundleItem" value="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#saleOrderItem.combinationIdentifier)}" />
-            <if condition="#{#soiItems == null}">
-                <if condition="#{#isBundleItem}">
-                    <var name="soiItems" value="#{new java.util.HashMap()}" />
-                    <else>
-                        <var name="soiItems" value="#{new java.util.ArrayList()}" />
-                    </else>
-                </if>
-                <var value="#{#channelSoiCodeToSoiItems.put(#saleOrderItem.channelSaleOrderItemCode, #soiItems)}" />
-            </if>
-            <if condition="#{#isBundleItem}">
-                <if condition="#{#soiItems.get(#saleOrderItem.combinationIdentifier) == null}">
-                    <var value="#{#soiItems.put(#saleOrderItem.combinationIdentifier , new java.util.ArrayList())}" />
-                </if>
-                <var value="#{#soiItems.get(#saleOrderItem.combinationIdentifier).add(#saleOrderItem.code)}" />
-                <else>
-                    <var value="#{#soiItems.add(#saleOrderItem.code)}" />
-                </else>
-            </if>
-        </foreach>
-        <log level="info" value="#{#TAG} channelSoiCodeToSoiItems : #{#channelSoiCodeToSoiItems.toString()}" />
-    </method>
-
-    <!-- PARAMS :   lineItemId
-    -->
-    <method name="getUcCustomerReturnedQtyForLineItem">
-        <!-- Simple SKU -->
-        <if condition="#{#channelSoiCodeToSoiItems.get(#lineItemId) instanceof T(java.util.ArrayList)}">
-            <var name="ucSoiCodesForLineItem" value="#{#channelSoiCodeToSoiItems.get(#lineItemId)}" />
-            <var name="ucCustomerReturnedQty" value="#{#ucSoiCodesForLineItem.?[#soiCodeToSoi.get(#this).reversePickup != null].size()}" />
-            <else>
-                <!-- Bundle SKU -->
-                <var name="bundleCodeToSoiCodes" value="#{#channelSoiCodeToSoiItems.get(#lineItemId)}" />
-                <!-- Returned qty = bundle count where Total soi codes in bundle = soi codes in bundle where reversePickup is not null -->
-                <var name="ucCustomerReturnedQty" value="#{#bundleCodeToSoiCodes.?[value.size() == value.?[#soiCodeToSoi.get(#this).reversePickup != null].size()].size()}" />
-            </else>
-        </if>
-    </method>
-
-    <method name="doLineItemCustomerReturn">
-        <!-- The soi that is cancellable(before dispatch) won't be reverse pickable(after dispatch) and vice-versa -->
-        <!-- Handle returned line item -->
-        <var name="isLineItemBundleInUc" value="#{#channelSoiCodeToSoiItems.get(#lineItemId) instanceof T(java.util.HashMap)}" />
-        <log level="info" value="#{#TAG} lineItemId : #{#lineItemId} , isLineItemBundleInUc : #{#isLineItemBundleInUc}" />
-
-        <if condition="#{#shopifyReturnedQty gt 0}">
-            <!-- Returns ucCustomerReturnedQty -->
-            <invoke method="getUcCustomerReturnedQtyForLineItem">
-                <param name="lineItemId" value="#{#lineItemId}" />
-            </invoke>
-            <log level="info" value="#{#TAG} For lineItemId : #{#lineItemId} : ucCustomerReturnedQty is #{#ucCustomerReturnedQty} and shopifyReturnedQty is #{#shopifyReturnedQty}" />
-            <if condition="#{#shopifyReturnedQty gt #ucCustomerReturnedQty}">
-                <var name="qtyToReturnInUc" value="#{#shopifyReturnedQty - #ucCustomerReturnedQty}" />
-                <log level="info" value="#{#TAG} qtyToReturnInUc for lineItemId : #{#lineItemId} is #{#qtyToReturnInUc}" />
-
-                <if condition="#{#isLineItemBundleInUc}">
-                    <!-- Bundle SKU -->
-                    <!-- ucSoiCodesForLineItem is a HashMap = bundleCodeToSoiCodes-->
-                    <var name="bundleCodeToSoiCodes" value="#{#channelSoiCodeToSoiItems.get(#lineItemId)}" />
-                    <foreach collection="#{#bundleCodeToSoiCodes.entrySet()}" var="bundleCodeToSoiCodesEntry">
-                        <var name="bundleCode" value="#{#bundleCodeToSoiCodesEntry.getKey()}" />
-                        <var name="bundleSoiCodes" value="#{#bundleCodeToSoiCodesEntry.getValue()}" />
-                        <log level="info" value="#{#TAG} qtyToReturnInUc : #{#qtyToReturnInUc} , bundleCode : #{#bundleCode} , bundleSoiCodes : #{#bundleSoiCodes.toString()}" />
-
-                        <if condition="#{#qtyToReturnInUc == 0}">
-                            <break />
-                        </if>
-
-                        <!-- <foreach collection="#{#bundleSoiCodes}" var="soiCode">
-                            <var name="soi" value="#{#soiCodeToSoi.get(#soiCode)}" />
-                            <if condition="#{#soi.isReversePickable()}">
-                                <var value="#{#soiCodeToUniwareStatus.put(#soiCode, 'RETURN_EXPECTED')}" />
-                                <var name="qtyToReturnInUc" value="#{#qtyToReturnInUc - 1}" />
-                                <log level="info" value="#{#TAG} Marking soi : #{#soiCode} as RETURN_EXPECTED" />
-                                <else>
-                                    <log level="info" value="#{#TAG} Not marking soi : #{#soiCode} as RETURN_EXPECTED since it is not reverse pickable in UC" />
-                                </else>
-                            </if>
-                        </foreach> -->
-
-                        <var name="soiCodesToReturnInBundle" value="#{new java.util.ArrayList()}" />
-                        <foreach collection="#{#bundleSoiCodes}" var="bundleSoiCode">
-                            <if condition="#{#soiCodeToSoi.get(#bundleSoiCode).isReversePickable()}">
-                                <var value="#{#soiCodesToReturnInBundle.add(#bundleSoiCode)}" />
-                            </if>
-                        </foreach>
-
-                        <log level="info" value="#{#TAG} bundleCode : #{#bundleCode} , soiCodesToReturnInBundle size : #{#soiCodesToReturnInBundle.size()} , bundleSoiCodes size : #{#bundleSoiCodes.size()}" />
-
-                        <if condition="#{#soiCodesToReturnInBundle.size() == #bundleSoiCodes.size()}">
-                            <var name="qtyToReturnInUc" value="#{#qtyToReturnInUc - 1}" />
-                            <foreach collection="#{#soiCodesToReturnInBundle}" var="soiCodeToBeReturned">
-                                <var value="#{#soiCodeToUniwareStatus.put(#soiCodeToBeReturned, 'RETURN_EXPECTED')}" />
-                            </foreach>
-                        </if>
-                    </foreach>
-                    <else>
-                        <var name="ucSoiCodesForLineItem" value="#{#channelSoiCodeToSoiItems.get(#lineItemId)}" />
-                        <!-- Simple SKU -->
-                        <foreach collection="#{#ucSoiCodesForLineItem}" var="soiCode">
-                            <if condition="#{#qtyToReturnInUc == 0}">
-                                <break />
-                            </if>
-                            <var name="soi" value="#{#soiCodeToSoi.get(#soiCode)}" />
-                            <if condition="#{#soi.isReversePickable()}">
-                                <var value="#{#soiCodeToUniwareStatus.put(#soiCode, 'RETURN_EXPECTED')}" />
-                                <var name="qtyToReturnInUc" value="#{#qtyToReturnInUc - 1}" />
-                                <log level="info" value="#{#TAG} Marking soi : #{#soiCode} as RETURN_EXPECTED" />
-                                <else>
-                                    <log level="info" value="#{#TAG} Not marking soi : #{#soiCode} as RETURN_EXPECTED since it is not reverse pickable in UC" />
-                                </else>
-                            </if>
-                        </foreach>
-                    </else>
-                </if>
-
-                <if condition="#{#qtyToReturnInUc != 0}">
-                    <log level="info" value="#{#TAG} No returnable item found for #{#lineItemId} in UC" />
-                </if>
-                <else>
-                    <log level="info" value="#{#TAG} No customer return required in UC for lineItemId : #{#lineItemId}" />
-                </else>
-            </if>
-            <else>
-                <log level="info" value="#{#TAG} No customer return required for lineItemId : #{#lineItemId} since shopifyReturnedQty is #{#shopifyReturnedQty}" />
-            </else>
-        </if>
-
-    </method>
-
-    <!-- PARAMS :   lineItemId
-    -->
-    <method name="getUcCancelledQtyForLineItem">
-        <if condition="#{#isLineItemBundleInUc}">
-            <!-- Cancelled qty = bundle count where Total soi codes in bundle = soi codes in bundle where statusCode is CANCELLED -->
-            <var name="bundleCodeToSoiCodes" value="#{#channelSoiCodeToSoiItems.get(#lineItemId)}" />
-            <var name="ucCancelledQty" value="#{#bundleCodeToSoiCodes.?[value.size() == value.?[#soiCodeToSoi.get(#this).statusCode.equals('CANCELLED')].size()].size()}" />
-            <else>
-                <var name="ucSoiCodesForLineItem" value="#{#channelSoiCodeToSoiItems.get(#lineItemId)}" />
-                <var name="ucCancelledQty" value="#{#ucSoiCodesForLineItem.?[#soiCodeToSoi.get(#this).statusCode.equals('CANCELLED')].size()}" />
-            </else>
-        </if>
-    </method>
-
-    <!-- PARAMS :   ucSoiCodesForLineItem
-    -->
-    <!-- If there is a cancellation on shopify and there are items in 'UNFULFILLABLE', 'ALTERNATE_SUGGESTED', 'LOCATION_NOT_SERVICEABLE', 'CREATED', 'FULFILLABLE', 'PICKING_FOR_INVOICING', 'PICKING_FOR_STAGING', 'STAGED' -->
-    <method name="doLineItemCancellation">
-        <if condition="#{#shopifyCancelledQty gt 0}">
-            <var name="isLineItemBundleInUc" value="#{#channelSoiCodeToSoiItems.get(#lineItemId) instanceof T(java.util.HashMap)}" />
-            <log level="info" value="#{#TAG} lineItemId : #{#lineItemId} , isLineItemBundleInUc : #{#isLineItemBundleInUc}" />
-
-            <!-- Returns ucCancelledQty -->
-            <invoke method="getUcCancelledQtyForLineItem">
-                <param name="lineItemId" value="#{#lineItemId}" />
-            </invoke>
-            <log level="info" value="#{#TAG} For lineItemId : #{#lineItemId} : ucCancelledQty is #{#ucCancelledQty} and shopifyCancelledQty is #{#shopifyCancelledQty}" />
-
-            <if condition="#{#shopifyCancelledQty gt #ucCancelledQty}">
-                <var name="qtyToCancelInUc" value="#{#shopifyCancelledQty - #ucCancelledQty}" />
-                <log level="info" value="#{#TAG} qtyToCancelInUc for lineItemId : #{#lineItemId} is #{#qtyToCancelInUc}" />
-                <if condition="#{#isLineItemBundleInUc}">
-                    <var name="bundleCodeToSoiCodes" value="#{#channelSoiCodeToSoiItems.get(#lineItemId)}" />
-                    <!-- Give preference to that bundle which has max items in these statuses : 'UNFULFILLABLE', 'ALTERNATE_SUGGESTED', 'LOCATION_NOT_SERVICEABLE' -->
-                    <!-- Populate priorityToBundleCodes map and bundleSoiCodesLengthList -->
-                    <var name="priorityToBundleCodes" value="#{new java.util.TreeMap(T(java.util.Collections).reverseOrder())}" />
-
-                    <foreach collection="#{#bundleCodeToSoiCodes}" var="bundleCodeToSoiCodesEntry">
-                        <var name="bundleCode" value="#{#bundleCodeToSoiCodesEntry.getKey()}" />
-                        <!-- SpringEL docs : https://docs.spring.io/spring-framework/docs/3.0.x/reference/expressions.html -->
-                        <var name="preferedBundleSoiCodesLength" value="#{#bundleCodeToSoiCodesEntry.getValue().?[T(com.unifier.core.utils.StringUtils).equalsAny(#soiCodeToSoi.get(#this).statusCode, 'UNFULFILLABLE', 'ALTERNATE_SUGGESTED', 'LOCATION_NOT_SERVICEABLE')].size()}" />
-                        <if condition="#{#priorityToBundleCodes.get(#preferedBundleSoiCodesLength) == null}">
-                            <var value="#{#priorityToBundleCodes.put(#preferedBundleSoiCodesLength , new java.util.ArrayList())}" />
-                        </if>
-                        <var value="#{#priorityToBundleCodes.get(#preferedBundleSoiCodesLength).add(#bundleCode)}" />
-                    </foreach>
-                    <log level="info" value="#{#TAG} priorityToBundleCodes : #{#priorityToBundleCodes?.toString()}" />
-
-                    <foreach collection="#{#priorityToBundleCodes.entrySet()}" var="priorityToBundleCodesEntry">
-                        <var name="priority" value="#{#priorityToBundleCodesEntry.getKey()}" />
-                        <var name="bundleCodes" value="#{#priorityToBundleCodesEntry.getValue()}" />
-                        <log level="debug" value="#{#TAG} priority : #{#priority} , bundleCodes : #{#bundleCodes.toString()}" />
-                        <if condition="#{#qtyToCancelInUc == 0}">
-                            <break />
-                        </if>
-                        <foreach collection="#{#bundleCodes}" var="bundleCode">
-                            <if condition="#{#qtyToCancelInUc == 0}">
-                                <break />
-                            </if>
-                            <var name="bundleSoiCodes" value="#{#bundleCodeToSoiCodes.get(#bundleCode)}" />
-                            <var name="bundleCancelledItemsCount" value="#{0}" />
-                            <var name="soiCodesToCancelInBundle" value="#{new java.util.ArrayList()}" />
-                            <foreach collection="#{#bundleSoiCodes}" var="bundleSoiCode">
-                                <if condition="#{#soiCodeToSoi.get(#bundleSoiCode).isCancellable()}">
-                                    <var value="#{#soiCodesToCancelInBundle.add(#bundleSoiCode)}" />
-                                    <var name="bundleCancelledItemsCount" value="#{#bundleCancelledItemsCount + 1}" />
-                                </if>
-                            </foreach>
-                            <log level="info" value="#{#TAG} bundleCode : #{#bundleCode} , bundleCancelledItemsCount : #{#bundleCancelledItemsCount} , bundleSoiCodes size : #{#bundleSoiCodes.size()}" />
-                            <!-- Decrement qtyToCancelInUc by 1 after all items in a bundle are cancelled -->
-                            <if condition="#{#bundleCancelledItemsCount == #bundleSoiCodes.size()}">
-                                <var name="qtyToCancelInUc" value="#{#qtyToCancelInUc - 1}" />
-                                <foreach collection="#{#soiCodesToCancelInBundle}" var="soiCodeToBeCancelled">
-                                    <var value="#{#soiCodeToUniwareStatus.put(#soiCodeToBeCancelled, 'CANCELLED')}" />
-                                </foreach>
-                            </if>
-                        </foreach>
-                    </foreach>
-
-                    <else>
-                        <var name="ucSoiCodesForLineItem" value="#{#channelSoiCodeToSoiItems.get(#lineItemId)}" />
-                        <!-- Soi with these statuses should be first preference for cancelling -->
-                        <var name="primarySoiCodesToCancel" value="#{#ucSoiCodesForLineItem.?[T(com.unifier.core.utils.StringUtils).equalsAny(#soiCodeToSoi.get(#this).statusCode, 'UNFULFILLABLE', 'ALTERNATE_SUGGESTED', 'LOCATION_NOT_SERVICEABLE')]}" />
-                        <var name="secondarySoiCodesToCancel" value="#{#ucSoiCodesForLineItem.?[T(com.unifier.core.utils.StringUtils).equalsAny(#soiCodeToSoi.get(#this).statusCode, 'CREATED', 'FULFILLABLE', 'PICKING_FOR_INVOICING', 'PICKING_FOR_STAGING', 'STAGED')]}" />
-
-                        <var name="soiCodesToCancel" value="#{new java.util.ArrayList()}" />
-                        <var value="#{#soiCodesToCancel.addAll(#primarySoiCodesToCancel)}" />
-                        <var value="#{#soiCodesToCancel.addAll(#secondarySoiCodesToCancel)}" />
-
-                        <foreach collection="#{#soiCodesToCancel}" var="soiCode">
-                            <if condition="#{#qtyToCancelInUc == 0}">
-                                <break />
-                            </if>
-                            <if condition="#{#soiCodeToSoi.get(#soiCode).isCancellable()}">
-                                <var value="#{#soiCodeToUniwareStatus.put(#soiCode, 'CANCELLED')}" />
-                                <var name="qtyToCancelInUc" value="#{#qtyToCancelInUc - 1}" />
-                            </if>
-                        </foreach>
-                    </else>
-                </if>
-
-                <if condition="#{#qtyToCancelInUc != 0}">
-                    <log level="info" value="#{#TAG} No cancellable item found for #{#lineItemId} in UC" />
-                </if>
-                <else>
-                    <log level="info" value="#{#TAG} No cancellation required in UC for lineItemId : #{#lineItemId}" />
-                </else>
-            </if>
-            <else>
-                <log level="info" value="#{#TAG} No cancellation required for lineItemId : #{#lineItemId} since shopifyCancelledQty is #{#shopifyCancelledQty}" />
-            </else>
-        </if>
-    </method>
-
-    <method name="doOrderDispatch">
-        <if condition="#{#isOrderFulfilled}">
-            <var name="ucDispatchedStatuses" value="#{new java.util.ArrayList()}" />
-            <!-- TODO : Should we have this status?? -->
-            <var value="#{#ucDispatchedStatuses.add('UNFULFILLABLE')}" />
-            <var value="#{#ucDispatchedStatuses.add('DISPATCHED')}" />
-            <var value="#{#ucDispatchedStatuses.add('DELIVERED')}" />
-            <var value="#{#ucDispatchedStatuses.add('REPLACED')}" />
-            <var value="#{#ucDispatchedStatuses.add('RESHIPPED')}" />
-            <var value="#{#ucDispatchedStatuses.add('CANCELLED')}" />
-            <var value="#{#ucDispatchedStatuses.add('LOCATION_NOT_SERVICEABLE')}" />
-            <!-- If sale order is fulfilled on shopify and we are not doing any cancellations and returns in this script execution then mark all soi as DISPATCHED 
-                    OPTIMISATION : Find and mark only those soi as DISPATCHED that are not already DISPATCHED in UC
-            -->
-            <if condition="#{#soiCodeToUniwareStatus.?[value.equals('CANCELLED')].size() == 0}">
-                <!-- We can dispatch soi here if required -->
-                <var name="saleOrderItemIterator" value="#{#saleOrder.saleOrderItems.iterator()}" />
-                <while condition="#{#saleOrderItemIterator.hasNext()}">
-                    <var name="saleOrderItem" value="#{#saleOrderItemIterator.next()}" />
-                    <if condition="#{!T(com.unifier.core.utils.StringUtils).equalsAny(#saleOrderItem.statusCode , #ucDispatchedStatuses)}">
-                        <log level="info" value="#{#TAG} Marking soi : #{#saleOrderItem.code} as DISPATCHED . soi statusCode : #{#saleOrderItem.statusCode}" />
-                        <var value="#{#soiCodeToUniwareStatus.put(#saleOrderItem.code , 'DISPATCHED')}" />
-                        <else>
-                            <log level="info" value="#{#TAG} Not marking soi : #{#saleOrderItem.code} as DISPATCHED since soi statusCode is #{#saleOrderItem.statusCode}" />
-                        </else>
-                    </if>
-                </while>
-            </if>
-            <else>
-                <log level="info" value="#{#TAG} Skipping dispatch since fulfillmentStatus is #{#fulfillmentStatus}" />
-            </else>
-        </if>
-    </method>
-
-    <startTag name="SaleOrderItems" />
 
     <var name="saleOrderCode" value="#{#saleOrder.code}" />
-    <var name="orderMetadata" value="#{#cancelledSaleOrdersMap.get(#saleOrderCode)}" />
-    <log level="info" value="#{#TAG} saleOrderCode : #{#saleOrderCode} , saleorderMetadata : #{#orderMetadata?.toString()}" />
 
-    <if condition="#{#orderMetadata != null}">
-        <var name="isOrderCancelled" value="#{#orderMetadata.get('isOrderCancelled') != null ? #orderMetadata.get('isOrderCancelled') : false}" />
-        <var name="fulfillmentStatus" value="#{#orderMetadata.get('fulfillmentStatus')}" />
-        <var name="lineItemIdToMetadata" value="#{#orderMetadata.get('lineItemIdToMetadata')}" />
-        <var name="isOrderFulfilled" value="#{'fulfilled'.equals(#fulfillmentStatus)}" />
-        <log level="info" value="#{#TAG} isOrderCancelled : #{#isOrderCancelled} , isOrderFulfilled : #{#isOrderFulfilled}, fulfillmentStatus : #{#fulfillmentStatus} , lineItemIdToMetadata : #{#lineItemIdToMetadata?.toString()}" />
+    <var name="getServiceBaseUrlResponse" value="#{new java.util.HashMap()}" />
 
-        <var name="soiCodeToUniwareStatus" value="#{new java.util.HashMap()}" />
-        <if condition="#{#isOrderCancelled}">
-            <log level="info" value="#{#TAG} Marking saleOrderCode : #{#saleOrder.code} as CANCELLED in uniware" />
-            <var name="saleOrderItemIterator" value="#{#saleOrder.saleOrderItems.iterator()}" />
-            <while condition="#{#saleOrderItemIterator.hasNext()}">
-                <var name="saleOrderItem" value="#{#saleOrderItemIterator.next()}" />
-                <if condition="#{#saleOrderItem.isCancellable()}">
-                    <var value="#{#soiCodeToUniwareStatus.put(#saleOrderItem.code , 'CANCELLED')}" />
+	<invoke method="getServiceBaseUrl">
+		<param name="getServiceBaseUrlResponse" value="#{#getServiceBaseUrlResponse}" />
+	</invoke>
+	
+	<var name="SHOPIFY_MS_BASE_URL" value="#{#getServiceBaseUrlResponse.get('baseUrl')}" />
+
+    <method name="prepareSaleOrderStatusSyncRequestHeaders">
+        <var name="tenantCode" value="#{T(com.uniware.core.utils.UserContext).current().tenant.code}" />
+
+        <var name="saleOrderStatusSyncRequestHeaders" value="#{new java.util.HashMap()}" />
+        <var value="#{#saleOrderStatusSyncRequestHeaders.put('hostname', #hostname )}" />
+        <var value="#{#saleOrderStatusSyncRequestHeaders.put('location_id', #locationId )}" />
+        <var value="#{#saleOrderStatusSyncRequestHeaders.put('username', #apiKey )}" />
+        <var value="#{#saleOrderStatusSyncRequestHeaders.put('password', #password )}" />
+        <var value="#{#saleOrderStatusSyncRequestHeaders.put('tenant_code', #tenantCode )}" />
+        <var value="#{#saleOrderStatusSyncRequestHeaders.put('location_id', #locationId )}" />
+        <var value="#{#saleOrderStatusSyncRequestHeaders.put('TenantCode', #tenantCode )}" />
+        <var value="#{#saleOrderStatusSyncRequestHeaders.put('ChannelCode', #channel.code )}" />
+        <var value="#{#saleOrderStatusSyncRequestHeaders.put('SourceCode', #channel.sourceCode )}" />
+        <var value="#{#saleOrderStatusSyncRequestHeaders.put('Content-Type', 'application/json' )}" />
+
+        <log level="info" value="saleOrderStatusSyncRequestHeaders: #{#saleOrderStatusSyncRequestHeaders.toString()}" />
+    </method>
+
+    <method name="prepareSaleOrderStatusSyncRequestBody">
+        <var name="saleOrderStatusSyncRequest" value="#{new java.util.HashMap()}" />
+        <var name="statusSyncSaleOrderItems" value="#{new java.util.ArrayList()}" />
+        <var value="#{#saleOrderStatusSyncRequest.put('statusSyncSaleOrderItems', #statusSyncSaleOrderItems)}" />
+        <!-- TODO: Check data type -->
+        <var name="shopifyOrderMetadata" value="#{#cancelledSaleOrdersMap.get(#saleOrderCode)}" />
+        <log level="info" value="shopifyOrderMetadata type: #{#shopifyOrderMetadata?.getClass().getName()}" />
+        <var value="#{#saleOrderStatusSyncRequest.put('shopifyOrderMetadata', #shopifyOrderMetadata)}" />
+
+        <var name="saleOrderItemIterator" value="#{#saleOrder.saleOrderItems.iterator()}" />
+        <while condition="#{#saleOrderItemIterator.hasNext()}">
+            <var name="saleOrderItem" value="#{#saleOrderItemIterator.next()}" />
+            <var name="saleOrderItemData" value="#{new java.util.HashMap()}" />
+            <var value="#{#saleOrderItemData.put('code', #saleOrderItem.code)}" />
+            <var value="#{#saleOrderItemData.put('statusCode', #saleOrderItem.statusCode)}" />
+            <var value="#{#saleOrderItemData.put('cancellable', #saleOrderItem.isCancellable())}" />
+            <var value="#{#saleOrderItemData.put('channelSaleOrderItemCode', #saleOrderItem.channelSaleOrderItemCode)}" />
+            <var value="#{#saleOrderItemData.put('combinationIdentifier', #saleOrderItem.combinationIdentifier)}" />
+            <var value="#{#saleOrderItemData.put('returned', #saleOrderItem.reversePickup != null)}" />
+            <var value="#{#saleOrderItemData.put('reversePickable', #saleOrderItem.isReversePickable())}" />
+            <var value="#{#statusSyncSaleOrderItems.add(#saleOrderItemData)}" />
+        </while>
+
+        <var name="saleOrderStatusSyncRequestBody" value="#{T(com.unifier.core.utils.JsonUtils).objectToString(#saleOrderStatusSyncRequest, true)}" />
+        <log level="info" value="saleOrderStatusSyncRequestBody: #{#saleOrderStatusSyncRequestBody}" />
+    </method>
+
+    <method name="doSaleOrderStatusSyncRequest">
+        <http method="POST" url="#{#SHOPIFY_MS_BASE_URL}/orders/#{#saleOrderCode}/status-sync" var="saleOrderStatusSyncResponse" fetchStatusCode="true">
+            <headers map="#{#saleOrderStatusSyncRequestHeaders}" />
+            <body>#{#saleOrderStatusSyncRequestBody}</body>
+        </http>
+
+        <log level="info" value="saleOrderStatusSyncResponse: #{#saleOrderStatusSyncResponse}" />
+    </method>
+
+    <method name="handleSaleOrderStatusSyncResponse">
+        <if condition="#{#saleOrderStatusSyncResponseCode == 200}">
+            <var name="saleOrderStatusSyncResponseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#saleOrderStatusSyncResponse)}" />
+            <var name="responseStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderStatusSyncResponseJson, 'status')}" />
+            <var name="responseMessage" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderStatusSyncResponseJson, 'message')}" />
+            <var name="responseErrors" value="#{#saleOrderStatusSyncResponseJson.get('errors')}" />
+            <log level="info" value="responseStatus: #{#responseStatus}" />
+            <if condition="#{'success'.equals(#responseStatus)}">
+                <var name="responseStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderStatusSyncResponseJson, 'status')}" />
+                <var name="wsSaleOrderItems" value="#{#saleOrderStatusSyncResponseJson.get('data')}" />
+                <else>
+                    <log level="info" value="responseStatus: #{#responseStatus} is not success" />
+                </else>
+            </if>
+            <else>
+                <if condition="#{#saleOrderStatusSyncResponseCode == 400}">
+                    <log level="info" value="Error(s) in request | responseMessage: #{#responseMessage} | responseErrors: #{#responseErrors}" />
                     <else>
-                        <log level="info" value="#{#TAG} Not marking #{#saleOrderItem.code} as cancelled since it's not cancellable in UC" />
+                        <log level="info" value="Error fetching orders status sync metadata" />
                     </else>
                 </if>
-            </while>
-            <else>
-                <!-- Handle partial cancellations and full order dispatch -->
-                <if condition="#{#lineItemIdToMetadata != null}">
-                    <invoke method="prepareChannelSoiCodeToSoiItems">
-                        <param name="saleOrderItems" value="#{#saleOrder.saleOrderItems.?[statusCode.equals('CANCELLED')]}" />
-                    </invoke>
-                    <var name="channelSoiCodeToCancelledSoiItems" value="#{#channelSoiCodeToSoiItems}" />
-
-                    <invoke method="prepareChannelSoiCodeToSoiItems">
-                        <param name="saleOrderItems" value="#{#saleOrder.saleOrderItems.?[reversePickup != null]}" />
-                    </invoke>
-                    <var name="channelSoiCodeToReturnedSoiItems" value="#{#channelSoiCodeToSoiItems}" />
-
-                    <!-- Returns channelSoiCodeToSoiItems -->
-                    <invoke method="prepareChannelSoiCodeToSoiItems">
-                        <param name="saleOrderItems" value="#{#saleOrder.saleOrderItems}" />
-                    </invoke>
-
-                    <foreach collection="#{#lineItemIdToMetadata.entrySet()}" var="lineItemIdToMetadataEntry">
-                        <var name="lineItemId" value="#{#lineItemIdToMetadataEntry.getKey()}" />
-                        <var name="metadata" value="#{#lineItemIdToMetadataEntry.getValue()}" />
-                        <var name="shopifyCancelledQty" value="#{#metadata.get('cancelledQty')}" />
-                        <var name="shopifyReturnedQty" value="#{#metadata.get('returnedQty')}" />
-
-                        <log level="info" value="#{#TAG} lineItemId : #{#lineItemId} , shopifyCancelledQty : #{#shopifyCancelledQty} , shopifyReturnedQty : #{#shopifyReturnedQty}" />
-                        <var name="ucSoiCodesForLineItem" value="#{#channelSoiCodeToSoiItems.get(#lineItemId)}" />
-
-                        <invoke method="doLineItemCancellation">
-                            <param name="channelSoiCodeToSoiItems" value="#{#channelSoiCodeToSoiItems}" />
-                            <param name="lineItemId" value="#{#lineItemId}" />
-                        </invoke>
-                        <invoke method="doLineItemCustomerReturn" />
-                    </foreach>
-
-                </if>
-
-                <invoke method="doOrderDispatch" />
-
             </else>
         </if>
-        <log level="info" value="#{#TAG} soiCodeToUniwareStatus : #{#soiCodeToUniwareStatus?.toString()}" />
+    </method>
 
-        <if condition="#{#soiCodeToUniwareStatus != null}">
-            <!-- Add actual XML tags -->
-            <foreach collection="#{#soiCodeToUniwareStatus.entrySet()}" var="soiCodeToUniwareStatusEntry">
-                <startTag name="SaleOrderItem" />
-                <valueTag name="Code" value="#{#soiCodeToUniwareStatusEntry.getKey()}" />
-                <valueTag name="StatusCode" value="#{#soiCodeToUniwareStatusEntry.getValue()}" />
-                <endTag name="SaleOrderItem" />
-            </foreach>
+    <method name="prepareSaleOrderStatusSyncXML">
+        <var name="wsSaleOrderItemsItr" value="#{#wsSaleOrderItems.iterator()}" />
+        <while condition="#{#wsSaleOrderItemsItr.hasNext()}">
+            <var name="wsSaleOrderItem" value="#{#wsSaleOrderItemsItr.next()}" />
+            <startTag name="SaleOrderItem" />
+            <valueTag name="Code" value="#{#wsSaleOrderItem.get('code').getAsString()}" />
+            <valueTag name="StatusCode" value="#{#wsSaleOrderItem.get('statusCode').getAsString()}" />
+            <endTag name="SaleOrderItem" />
+        </while>
+    </method>
+
+    <invoke method="prepareSaleOrderStatusSyncRequestHeaders" />
+    <invoke method="prepareSaleOrderStatusSyncRequestBody" />
+    <invoke method="doSaleOrderStatusSyncRequest" />
+    <invoke method="handleSaleOrderStatusSyncResponse">
+        <param name="saleOrderStatusSyncResponseCode" value="#{#saleOrderStatusSyncResponseResponseCode}" />
+    </invoke>
+
+    <startTag name="SaleOrderItems" />
+        <if condition="#{#wsSaleOrderItems == null or #wsSaleOrderItems.isJsonNull() or !#wsSaleOrderItems.isJsonArray()}">
+            <log level="info" value="data is null in saleOrderStatusSyncResponse" />
+            <else>
+                <invoke method="prepareSaleOrderStatusSyncXML">
+                    <param name="wsSaleOrderItems" value="#{#wsSaleOrderItems.getAsJsonArray()}" />
+                </invoke>
+            </else>
         </if>
-        <else>
-            <log level="info" value="#{#TAG} Sale Order [#{#saleOrder.code}] status not available in cancelledSaleOrdersMap." />
-        </else>
-    </if>
-
     <endTag name="SaleOrderItems" />
 
 </scraper>
