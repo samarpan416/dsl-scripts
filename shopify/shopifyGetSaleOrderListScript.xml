@@ -24,147 +24,115 @@
             and 
             fulfillment_status=unfulfilled(Returns orders with fulfillment_status of null or partial) 
     -->
-
-	<var name="TAG" value="" />
 	<log level="info" value="#{#TAG} Fetching page : #{#pageNumber}" />
-	<log level="info" value="#{#TAG} daysToFetchOrdersFor : #{#daysToFetchOrdersFor} day(s)" />
-	<var name="urlQueryParams" value="#{new java.util.HashMap()}" />
-	<var name="hasMoreOrders" value="#{false}" />
-	<var name="DAYS_TO_FETCH_ORDERS_FOR" value="#{(#daysToFetchOrdersFor != null) ? #daysToFetchOrdersFor : 25}" />
-	<log level="info" value="#{#TAG} DAYS_TO_FETCH_ORDERS_FOR : #{#DAYS_TO_FETCH_ORDERS_FOR} day(s)" />
 
-	<var name="LIMIT" value="200" />
-	<var name="updatedAfter" value="#{T(java.time.LocalDate).now().minusDays(#DAYS_TO_FETCH_ORDERS_FOR).toString()}" />
-	<var name="REQUEST_RETRIES_ALLOWED" value="#{1}" />
-	<!-- PARAMS:    requestRetryCount 
-                    REQUEST_RETRIES_ALLOWED
-                    url
-                    authHeaders
-                    urlQueryParams
-                    handlingInfo
-                    path
-        
-        RETURNS:    handlingInfo.responseJson
-    -->
-	<method name="executeRestRequest">
-		<!-- NOTE : Added to simplify usage of 'requestRetryCount' -->
-		<var name="requestRetryCount" value="#{(#requestRetryCount != null) ? #requestRetryCount : 0}" />
-		<http method="GET" url="#{#url}" var="response" fetchResponseHeaders="true" fetchStatusCode="true" cacheClient="false">
-			<header name="Content-Type" value="application/json" />
-			<headers map="#{#authHeaders}" />
-			<params map="#{#urlQueryParams}" />
-		</http>
-		<log level="info" value="#{#TAG} response : #{#response}" />
-		<log level="info" value="#{#TAG} responseHeaders : #{#responseHeaders.toString()}" />
+	<var name="getServiceBaseUrlResponse" value="#{new java.util.HashMap()}" />
+	<invoke method="getServiceBaseUrl" script="shopifyUtils">
+		<param name="getServiceBaseUrlResponse" value="#{#getServiceBaseUrlResponse}" />
+	</invoke>
+	<var name="SHOPIFY_MS_BASE_URL" value="#{#getServiceBaseUrlResponse.get('baseUrl')}" />
 
-		<var name="responseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#response)}" />
+	<method name="prepareGetOrdersRequestHeaders">
+		<var name="requiredHeaders" value="#{new java.util.HashMap()}" />
+        <invoke method="getRequiredServiceRequestHeaders" script="shopifyUtils">
+            <param name="requiredHeaders" value="#{#requiredHeaders}" />
+            <param name="hostname" value="#{#hostname}" />
+            <param name="locationId" value="#{#locationId}" />
+            <param name="apiKey" value="#{#apiKey}" />
+            <param name="password" value="#{#password}" />
+            <param name="tenantCode" value="#{T(com.uniware.core.utils.UserContext).current().tenant.code}" />
+            <param name="channelCode" value="#{#channel.code}" />
+            <param name="channelSourceCode" value="#{#channel.sourceCode}" />
+        </invoke>
 
-		<!-- <var name="handlingInfo" value="#{new java.util.HashMap()}" /> -->
-		<var value="#{#handlingInfo.put('requestRetryCount',#requestRetryCount)}" />
-		<var value="#{#handlingInfo.put('requestRetriesAllowed',#REQUEST_RETRIES_ALLOWED)}" />
-		<var value="#{#handlingInfo.put('responseJson',#responseJson)}" />
-		<var value="#{#handlingInfo.put('responseHeaders',#responseHeaders)}" />
-		<invoke method="handleHttpStatusCodes" script="shopifyUtils">
-			<param name="path" value="#{#path}" />
-			<param name="responseHeaders" value="#{#responseHeaders}" />
-			<param name="responseCode" value="#{#responseResponseCode}" />
-			<param name="responseJson" value="#{#responseJson}" />
-			<param name="handlingInfo" value="#{#handlingInfo}" />
-		</invoke>
+		<var name="getOrdersRequestHeaders" value="#{new java.util.HashMap()}" />
+		<var value="#{#getOrdersRequestHeaders.putAll(#requiredHeaders)}" />
 
-		<var name="shouldRetry" value="#{#handlingInfo.get('shouldRetry')}" />
-		<var name="sleepInterval" value="#{#handlingInfo.get('sleepInterval')}" />
-		<!-- Retry if needed -->
-		<while condition="#{#shouldRetry == true}">
-			<log level="info" value="#{#TAG} Retrying #{#path} request after #{#sleepInterval}ms" />
-			<var value="#{T(java.lang.Thread).sleep(#sleepInterval)}" />
-			<invoke method="executeRestRequest">
-				<param name="url" value="#{#url}" />
-				<param name="urlQueryParams" value="#{#urlQueryParams}" />
-				<param name="authHeaders" value="#{#authHeaders}" />
-				<param name="handlingInfo" value="#{#handlingInfo}" />
-				<param name="requestRetryCount" value="#{#handlingInfo.get('requestRetryCount')}" />
-				<param name="REQUEST_RETRIES_ALLOWED" value="#{#REQUEST_RETRIES_ALLOWED}" />
-				<param name="path" value="#{#path}" />
-			</invoke>
-		</while>
+		<log level="info" value="getOrdersRequestHeaders: #{#getOrdersRequestHeaders.toString()}" />
 	</method>
 
+	<method name="doGetOrdersRequest">
+		<http method="GET" url="#{#url}" var="getOrdersResponse" fetchStatusCode="true" fetchResponseHeaders="true">
+			<headers map="#{#getOrdersRequestHeaders}" />
+		</http>
+
+		<log level="info" value="getOrdersResponse: #{#getOrdersResponse} , getOrdersResponseHeaders: #{#getOrdersResponseHeaders.toString()} , getOrdersResponseCode: #{#getOrdersResponseResponseCode}" />
+	</method>
+
+	<method name="handleGetOrdersResponse">
+		<if condition="#{#getOrdersResponseCode == 200}">
+			<var name="getOrdersResponseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#getOrdersResponse)}" />
+			<var name="responseStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#getOrdersResponseJson, 'status')}" />
+			<var name="responseMessage" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#getOrdersResponseJson, 'message')}" />
+			<var name="responseErrors" value="#{#getOrdersResponseJson.get('errors')}" />
+			<log level="info" value="responseStatus: #{#responseStatus}" />
+			<if condition="#{'success'.equals(#responseStatus)}">
+				<var name="responseStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#getOrdersResponseJson, 'status')}" />
+				<var name="orders" value="#{#getOrdersResponseJson.get('data')}" />
+				<else>
+					<log level="info" value="responseStatus: #{#responseStatus} is not success" />
+				</else>
+			</if>
+			<else>
+				<if condition="#{#getOrdersResponseCode == 400}">
+					<log level="info" value="Error(s) in request | responseMessage: #{#responseMessage} | responseErrors: #{#responseErrors}" />
+					<else>
+						<log level="info" value="Error fetching orders" />
+					</else>
+				</if>
+			</else>
+		</if>
+	</method>
+
+	<method name="addSaleOrders" >
+		<if condition="#{#orders == null or #orders.isJsonNull() or !#orders.isJsonArray()}">
+			<log level="info" value="Invalid data in getOrdersResponse" />
+			<else>
+				<var name="ordersItr" value="#{#orders.iterator()}" />
+				<while condition="#{#ordersItr.hasNext()}">
+					<var name="order" value="#{#ordersItr.next()}" />
+					<var name="orderId" value="#{#order.get('id').getAsString()}" />
+					<log level="info" value="Adding order #{#orderId}" />
+					<valueTag name="SaleOrder" value="#{#orderId}" />
+					<var value="#{#resultItems.put(#orderId, #order.toString())}" />
+				</while>
+			</else>
+		</if>
+	</method>
+
+	<method name="getTotalPages" >
+		<var name="totalPages" value="#{#pageNumber}" />
+
+		<var name="nextPageUrl" value="#{#getOrdersResponseHeaders.get('Link')}" />
+		<if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#nextPageUrl)}">
+			<var name="totalPages" value="#{#pageNumber + 1}" />
+			<var value="#{#metadata.put('url', #nextPageUrl)}" />
+		</if>
+	</method>
 
 	<if condition="#{#pageNumber eq 1}">
-		<var name="authHeadersAndUrl" value="#{new java.util.HashMap()}" />
-		<var name="channelConnectorParams" value="#{new java.util.HashMap()}" />
-		<var value="#{#channelConnectorParams.put('apiKey',#apiKey)}" />
-		<var value="#{#channelConnectorParams.put('password',#password)}" />
-		<var value="#{#channelConnectorParams.put('accessToken',#token)}" />
-		<var value="#{#channelConnectorParams.put('hostname',#hostname)}" />
-
-		<invoke method="getAuthHeadersAndUrl" script="shopifyUtils">
-			<param name="channelConnectorParams" value="#{#channelConnectorParams}" />
-			<param name="authHeadersAndUrl" value="#{#authHeadersAndUrl}" />
-		</invoke>
-		<var name="url" value="#{#authHeadersAndUrl.get('url')}" />
-		<var name="authHeaders" value="#{#authHeadersAndUrl.get('authHeaders')}" />
-		<log level="info" value="#{#TAG} url : #{#url}, authHeaders : #{#authHeaders.toString()}" />
-		<var name="getOrdersURL" value="#{#url}/orders.json" />
-		<var value="#{#urlQueryParams.put('limit', #LIMIT )}" />
-		<var value="#{#urlQueryParams.put('fulfillment_status', 'unfulfilled' )}" />
-		<var value="#{#urlQueryParams.put('updated_at_min', #updatedAfter )}" />
-
-		<!-- Set url and authHeaders in metadata which will be used for fetching the following pages -->
-		<var value="#{#metadata.put('url', #url)}" />
-		<var value="#{#metadata.put('authHeaders', #authHeaders)}" />
-
+		<var name="url" value="#{#SHOPIFY_MS_BASE_URL}/orders" />
 		<else>
 			<var name="url" value="#{#metadata.get('url')}" />
-			<var name="authHeaders" value="#{#metadata.get('authHeaders')}" />
-			<var name="getOrdersURL" value="#{#url}/orders.json" />
-			<var value="#{#urlQueryParams.put('limit', #LIMIT )}" />
-			<var value="#{#urlQueryParams.put('page_info', #metadata.get('pageInfo') )}" />
-			<var value="#{#metadata.remove('pageInfo')}" />
 		</else>
 	</if>
 
+	<invoke method="prepareGetOrdersRequestHeaders" />
 
-	<var name="handlingInfo" value="#{new java.util.HashMap()}" />
-	<invoke method="executeRestRequest">
-		<param name="REQUEST_RETRIES_ALLOWED" value="#{#REQUEST_RETRIES_ALLOWED}" />
-		<param name="url" value="#{#getOrdersURL}" />
-		<param name="authHeaders" value="#{#authHeaders}" />
-		<param name="urlQueryParams" value="#{#urlQueryParams}" />
-		<param name="handlingInfo" value="#{#handlingInfo}" />
-		<param name="path" value="/orders.json" />
+	<invoke method="doGetOrdersRequest">
+		<param name="url" value="#{#url}" />
 	</invoke>
 
-	<var name="saleOrderListJson" value="#{#handlingInfo.get('responseJson')}" />
-	<var name="saleOrderListResponseHeaders" value="#{#handlingInfo.get('responseHeaders')}" />
-
-	<var name="link" value="#{#saleOrderListResponseHeaders.get('Link')}" />
-	<invoke method="getNextPageInfo" script="shopifyUtils">
-		<param name="link" value="#{#link}" />
-		<param name="metadata" value="#{#metadata}" />
+	<invoke method="handleGetOrdersResponse">
+		<param name="getOrdersResponseCode" value="#{#getOrdersResponseResponseCode}" />
 	</invoke>
-	<var name="pageInfo" value="#{#metadata.get('pageInfo')}" />
-	<if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#pageInfo)}">
-		<var name="hasMoreOrders" value="#{true}" />
-	</if>
-	<log level="info" value="#{#TAG} hasMoreOrders : #{#hasMoreOrders}" />
-	<var name="saleOrderIterator" value="#{#saleOrderListJson.get('orders').getAsJsonArray().iterator()}" />
+
 	<startTag name="SaleOrders" />
-	<while condition="#{#saleOrderIterator.hasNext()}">
-		<var name="saleOrderJson" value="#{#saleOrderIterator.next()}" />
-		<var name="saleOrderId" value="#{#saleOrderJson.get('id').getAsString()}" />
-		<log level="info" value="#{#TAG} Adding SaleOrder : #{#saleOrderId}" />
-		<var value="#{#resultItems.put(#saleOrderId,#saleOrderJson.toString())}" />
-		<valueTag name="SaleOrder" value="#{#saleOrderId}" />
-	</while>
-	<if condition="#{#hasMoreOrders}">
-		<valueTag name="TotalPages" value="#{#pageNumber + 1}" />
-		<else>
-			<valueTag name="TotalPages" value="#{#pageNumber}" />
-		</else>
-	</if>
+		<invoke method="addSaleOrders" >
+			<param name="orders" value="#{#orders}" />
+		</invoke>
+		<invoke method="getTotalPages" />
+		<valueTag name="TotalPages" value="#{#totalPages}" />
 	<endTag name="SaleOrders" />
-
 
 </scraper>
