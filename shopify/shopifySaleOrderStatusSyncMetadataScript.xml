@@ -1,21 +1,26 @@
 <scraper name="shopifySaleOrderStatusSyncMetadataScript" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.unicommerce.com/schema/scraper-1.0.xsd">
 	
-    <var name="SHOPIFY_MS_BASE_URL" value="https://3b03-103-248-87-34.in.ngrok.io/shopify" />
+	<var name="getServiceBaseUrlResponse" value="#{new java.util.HashMap()}" />
+	<invoke method="getServiceBaseUrl" script="shopifyUtils">
+		<param name="getServiceBaseUrlResponse" value="#{#getServiceBaseUrlResponse}" />
+	</invoke>
+	<var name="SHOPIFY_MS_BASE_URL" value="#{#getServiceBaseUrlResponse.get('baseUrl')}" />
 
     <method name="prepareGetOrdersStatusSyncMetadataRequestHeaders">
-		<var name="tenantCode" value="#{T(com.uniware.core.utils.UserContext).current().tenant.code}" />
+		<var name="requiredHeaders" value="#{new java.util.HashMap()}" />
+        <invoke method="getRequiredServiceRequestHeaders" script="shopifyUtils">
+            <param name="requiredHeaders" value="#{#requiredHeaders}" />
+            <param name="hostname" value="#{#hostname}" />
+            <param name="locationId" value="#{#locationId}" />
+            <param name="apiKey" value="#{#apiKey}" />
+            <param name="password" value="#{#password}" />
+            <param name="tenantCode" value="#{T(com.uniware.core.utils.UserContext).current().tenant.code}" />
+            <param name="channelCode" value="#{#channel.code}" />
+            <param name="channelSourceCode" value="#{#channel.sourceCode}" />
+        </invoke>
 
 		<var name="getOrdersStatusSyncMetadataRequestHeaders" value="#{new java.util.HashMap()}" />
-		<var value="#{#getOrdersStatusSyncMetadataRequestHeaders.put('hostname', #hostname )}" />
-		<var value="#{#getOrdersStatusSyncMetadataRequestHeaders.put('location_id', #locationId )}" />
-		<var value="#{#getOrdersStatusSyncMetadataRequestHeaders.put('username', #apiKey )}" />
-		<var value="#{#getOrdersStatusSyncMetadataRequestHeaders.put('password', #password )}" />
-		<var value="#{#getOrdersStatusSyncMetadataRequestHeaders.put('tenant_code', #tenantCode )}" />
-		<var value="#{#getOrdersStatusSyncMetadataRequestHeaders.put('location_id', #locationId )}" />
-		<var value="#{#getOrdersStatusSyncMetadataRequestHeaders.put('TenantCode', #tenantCode )}" />
-		<var value="#{#getOrdersStatusSyncMetadataRequestHeaders.put('ChannelCode', #channel.code )}" />
-		<var value="#{#getOrdersStatusSyncMetadataRequestHeaders.put('SourceCode', #channel.sourceCode )}" />
-		<var value="#{#getOrdersStatusSyncMetadataRequestHeaders.put('Content-Type', 'application/json' )}" />
+		<var value="#{#getOrdersStatusSyncMetadataRequestHeaders.putAll(#requiredHeaders)}" />
 
 		<log level="info" value="getOrdersStatusSyncMetadataRequestHeaders: #{#getOrdersStatusSyncMetadataRequestHeaders.toString()}" />
 	</method>
