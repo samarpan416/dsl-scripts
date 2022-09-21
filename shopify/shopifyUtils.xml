@@ -1,0 +1,160 @@
+<scraper name="shopifyUtils" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.unicommerce.com/schema/scraper-1.0.xsd" cachehttpclient="false">
+
+    <!--
+        PARAMS :    channelConnectorParams, 
+                    authHeadersAndUrl 
+    -->
+
+    <method name="getAuthHeadersAndUrl">
+        <var name="TAG" value="[ShopifyUtils]" />
+
+        <var name="apiVersion" value="2021-04" />
+        <if condition="#{(#channelConnectorParams eq null) or (#authHeadersAndUrl eq null)}">
+            <scriptError message="Either of the params 'channelConnectorParams', 'authHeadersAndUrl' or both are missing. Please provide them at invocation." />
+        </if>
+
+        <!--
+            https://shopify.dev/concepts/about-apis/authentication 
+        -->
+        <log level="info" value="#{#TAG} #{#channelConnectorParams.toString()}" />
+        <var name="hostname" value="#{#channelConnectorParams.get('hostname')}" />
+        <var name="accessToken" value="#{#channelConnectorParams.get('accessToken')}" />
+        <var name="apiKey" value="#{#channelConnectorParams.get('apiKey')}" />
+        <var name="password" value="#{#channelConnectorParams.get('password')}" />
+        <var name="url" value="https://#{#hostname}/admin/api/#{#apiVersion}" />
+
+        <var value="#{#authHeadersAndUrl.put('url',#url)}" />
+        <var value="#{#authHeadersAndUrl.put('authHeaders',new java.util.HashMap())}" />
+
+        <if condition="#{T(com.unifier.core.utils.StringUtils).isBlank(#apiKey)}">
+
+            <var name="isPublicApp" value="#{true}" />
+            <var value="#{#authHeadersAndUrl.get('authHeaders').put('X-Shopify-Access-Token',#accessToken)}" />
+
+            <else>
+                <!--
+                    https://shopify.dev/tutorials/authenticate-a-private-app-with-shopify-admin#make-authenticated-requests 
+                -->
+                <var name="isPublicApp" value="#{false}" />
+                <!-- 
+                    For private apps authentication is done by providing the credentials in the Authorization header field.
+                    1. Join the API key and password with a single colon (:).
+                    2. Encode the resulting string in base64 representation.
+                    3. Prepend the base64-encoded string with Basic and a space.
+                -->
+                <var name="stringToEncode" value="#{#apiKey}:#{#password}" />
+                <var value="#{#authHeadersAndUrl.get('authHeaders').put('Authorization','Basic ' + T(com.unifier.core.utils.EncryptionUtils).base64Encode(#stringToEncode.getBytes()))}" />
+            </else>
+        </if>
+    </method>
+    <!-- PARAMS:    path
+                    responseHeaders
+                    responseCode
+                    responseJson
+                    handlingInfo
+    -->
+    <method name="handleHttpStatusCodes">
+        <var name="TAG" value="[ShopifyUtils]" />
+
+        <var name="requestRetryCount" value="#{#handlingInfo.get('requestRetryCount')}" />
+        <var name="requestRetriesAllowed" value="#{#handlingInfo.get('requestRetriesAllowed')}" />
+        <var value="#{#handlingInfo.put('shouldRetry',false)}" />
+        <if condition="#{#responseCode != 200}">
+            <if condition="#{#responseCode == 429}">
+                <log level="info" value="#{#TAG} #{#path} : Rate limit error" />
+                <if condition="#{#requestRetryCount &lt; #requestRetriesAllowed}">
+                    <var name="requestRetryCount" value="#{#requestRetryCount + 1}" />
+                    <var name="retryAfterHeaderValue" value="#{#responseHeaders.get('Retry-After')}" />
+                    <if condition="#{#retryAfterHeaderValue != null}">
+                        <!-- Rate limit exceeded -->
+                        <var name="sleepInterval" value="#{T(java.lang.Double).parseDouble(#retryAfterHeaderValue).intValue() * 1000}" />
+                        <var value="#{#handlingInfo.put('sleepInterval',#sleepInterval)}" />
+                        <var value="#{#handlingInfo.put('shouldRetry',true)}" />
+                        <var value="#{#handlingInfo.put('requestRetryCount',#requestRetryCount)}" />
+                        <else>
+                            <log level="info" value="#{#TAG} Retry-After header not found." />
+                            <scriptError message="ERROR : #{#responseJson.get('errors').getAsString()}." />
+                        </else>
+                    </if>
+                    <else>
+                        <log level="info" value="#{#TAG} Retries exhausted." />
+                        <scriptError message="ERROR : #{#responseJson.get('errors').getAsString()}" />
+                    </else>
+                </if>
+                <else>
+                    <scriptError message="ERROR : #{#responseJson.toString()}" />
+                </else>
+            </if>
+        </if>
+    </method>
+
+    <!-- PARAMS:    link
+                    metadata        
+    -->
+    <method name="getNextPageUrl">
+        <var name="TAG" value="[ShopifyUtils]" />
+
+        <if condition="#{#link != null}">
+            <var name="linkPartsArray" value="#{#link.split(',')}" />
+            <var name="nextPagePart" value="#{ (#linkPartsArray.length &gt; 1) ? #linkPartsArray[1]: #linkPartsArray[0] }" />
+            <!-- extract next page url from nextPagePart -->
+            <var name="parts" value="#{#nextPagePart.split(';')}" />
+            <var name="urlPart" value="#{#parts[0].trim()}" />
+            <var name="relPart" value="#{#parts[1].trim()}" />
+            <var name="pattern" value="#{'&quot;next&quot;'}" />
+            <if condition="#{#relPart.split('=')[1].trim().equals(#pattern)}">
+                <var name="nextPageUrl" value="#{#urlPart.substring(1,#urlPart.length()-1)}" />
+                <var value="#{#metadata.put('nextPageUrl', #nextPageUrl)}" />
+            </if>
+            <log level="info" value="#{#TAG} Next Page Url : #{#nextPageUrl}" />
+            <!-- set nextPageUrl and authHeaders in metadata -->
+        </if>
+    </method>
+
+    <!--  Pagination Logic . Docs -> https://shopify.dev/tutorials/make-paginated-requests-to-rest-admin-api#make-a-paginated-request-and-iterate-through-the-pages  -->
+    <method name="getNextPageInfo">
+        <var name="TAG" value="[ShopifyUtils]" />
+
+        <var name="pageInfo" value="" />
+
+        <if condition="#{#link eq null}">
+            <log level="debug" value="#{#TAG} Link not found in Response Headers." />
+            <else>
+                <var name="linkArray" value="#{#link.split(',')}" />
+                <var name="relNext" value="#{ (#linkArray.length &gt; 1) ? #linkArray[1]: #linkArray[0] }" />
+                <!-- Extracting page_info from the Link using regex since we get 2 urls,previous page and next page.
+                    We need to extract page_info from the next page url  -->
+                <var name="nextPageInfoPattern" value="#{'(?&lt;=page_info=)(.*)(?=&gt;; rel=&#34;next&#34;)'}" />
+                <var name="nextPageInfoMatcher" value="#{T(java.util.regex.Pattern).compile(#nextPageInfoPattern).matcher(#relNext)}" />
+                <while condition="#{#nextPageInfoMatcher.find()}">
+                    <var name="pageInfo" value="#{#nextPageInfoMatcher.group()}" />
+                </while>
+
+                <if condition="#{T(com.unifier.core.utils.StringUtils).isBlank(#pageInfo)}">
+                    <log level="debug" value="#{#TAG} page_info for next page NOT_FOUND." />
+                    <else>
+                        <var value="#{#metadata.put('pageInfo', #pageInfo)}" />
+                    </else>
+                </if>
+            </else>
+        </if>
+
+    </method>
+
+    <!-- PARAMS:    requestCost
+     -->
+    <method name="handleGQLThrottle">
+        <var name="TAG" value="[ShopifyUtils]" />
+
+        <log level="info" value="#{#TAG} THROTTLE STATUS : #{#requestCost.toString()}" />
+
+        <var name="requestedQueryCost" value="#{#requestCost.get('requestedQueryCost').getAsInt()}" />
+        <var name="currentlyAvailable" value="#{#requestCost.get('throttleStatus').get('currentlyAvailable').getAsInt()}" />
+        <var name="shopifyRestoreRate" value="#{50.0}" />
+
+        <var name="sleepDuration" value="#{T(java.lang.Math).ceil((#requestedQueryCost - #currentlyAvailable) / #shopifyRestoreRate)}" />
+        <log level="info" value="#{#TAG} Sleeping for #{#sleepDuration}s ...." />
+        <var value="#{T(java.lang.Thread).sleep(#sleepDuration)}" />
+    </method>
+
+</scraper>
