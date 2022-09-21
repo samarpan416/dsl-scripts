@@ -1,17 +1,17 @@
 {
-    "orderId": "",
+    "orderId": "String",
     "order":"saleOrderDetailElement",
     "configurationParameters":{
-        "applicableProvinceCodes":"",
-        "stateCodeRequired":"",
-        "customFieldsCustomization":"",
-        "enablePOS":""
+        "applicableProvinceCodes": "String",
+        "stateCodeRequired": "Boolean",
+        "customFieldsCustomization": "String",
+        "enablePOS": "Boolean"
     },
     "connectorParameters":{
-        "apiKey":"",
-        "hostname":"",
-        "password":"",
-        "accessToken":"",
-        "prefix":""
+        "apiKey": "String",
+        "hostname": "String",
+        "password": "String",
+        "accessToken": "String",
+        "prefix": "String"
     }
 }
