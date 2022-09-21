@@ -1,0 +1,58 @@
+<scraper name="shopifyUserVerificationScript" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.unicommerce.com/schema/scraper-1.0.xsd" cachehttpclient="false">
+
+
+    <var name="TAG" value="[ShopifyUserVerificationScript]" />
+    <var name="authHeadersAndUrl" value="#{new java.util.HashMap()}" />
+    <var name="channelConnectorParams" value="#{new java.util.HashMap()}" />
+    <var value="#{#channelConnectorParams.put('apiKey',#apiKey)}" />
+    <var value="#{#channelConnectorParams.put('password',#password)}" />
+    <var value="#{#channelConnectorParams.put('accessToken',#token)}" />
+    <var value="#{#channelConnectorParams.put('hostname',#hostname)}" />
+
+    <invoke method="getAuthHeadersAndUrl" script="shopifyUtils">
+        <param name="channelConnectorParams" value="#{#channelConnectorParams}" />
+        <param name="authHeadersAndUrl" value="#{#authHeadersAndUrl}" />
+    </invoke>
+    <var name="url" value="#{#authHeadersAndUrl.get('url')}" />
+    <var name="authHeaders" value="#{#authHeadersAndUrl.get('authHeaders')}" />
+
+    <log level="info" value="#{#TAG} url : #{#url}" />
+    <log level="info" value="#{#TAG} authHeaders : #{#authHeaders.toString()}" />
+
+    <!-- Check location also -->
+    <var name="getLocationRequestBody">
+        <![CDATA[
+        {"query":"query { location(id:\"gid://shopify/Location/#{#locationId}\") {id}}"}
+    ]]>
+    </var>
+    <log level="info" value="#{#TAG} getLocationRequestBody : #{#getLocationRequestBody}" />
+    <try>
+        <http url="#{#url}/graphql.json" method="post" var="getLocationResponse" cacheClient="false">
+            <header name="Content-Type" value="application/json" />
+            <headers map="#{#authHeaders}" />
+            <body>#{#getLocationRequestBody}</body>
+        </http>
+        <catch>
+            <!-- Hostname url format error -->
+            <scriptError message="Hostname url format error. Check it against {your_store_name}.myshopify.com" />
+        </catch>
+    </try>
+    <log level="info" value="#{#TAG} getLocationResponse : #{#getLocationResponse}" />
+
+    <var name="locationJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#getLocationResponse)}" />
+
+
+    <if condition="#{#getLocationResponse.contains('errors') or #getLocationResponse == null }">
+        <if condition="#{'Not Found'.equalsIgnoreCase(#locationJson.get('errors').getAsString())}">
+            <scriptError message="Invalid Store name" />
+            <else>
+                <scriptError message="#{#locationJson.get('errors').getAsString()}" />
+            </else>
+        </if>
+    </if>
+
+    <var name="locationInfo" value="#{#locationJson.get('data').get('location')}" />
+    <if condition="#{#locationInfo.isJsonNull()}">
+        <scriptError message="Invalid locationId." />
+    </if>
+</scraper>
