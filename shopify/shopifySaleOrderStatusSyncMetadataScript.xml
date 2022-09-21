@@ -40,7 +40,7 @@
 				<var name="dataJsonObject" value="#{#getOrdersStatusSyncMetadataResponseJson.get('data').getAsJsonObject()}" />
                 <var name="dataString" value="#{T(com.unifier.core.utils.JsonUtils).objectToString(#dataJsonObject)}" />
                 <var name="saleOrderCodeToMetadataMap" value="#{T(com.unifier.core.utils.JsonUtils).jsonToMap(#dataString)}" />
-				<log level="info" value="saleOrderCodeToMetadataMap members type: #{#saleOrderCodeToMetadataMap.get('members').getClass().getName()}" />
+				<log level="info" value="saleOrderCodeToMetadataMap members type: #{#saleOrderCodeToMetadataMap.get('members').get('4568483954870').getClass().getName()}" />
                 <var value="#{#resultItems.putAll(#saleOrderCodeToMetadataMap.get('members'))}" />
 				<else>
 					<log level="info" value="responseStatus: #{#responseStatus} is not success" />
