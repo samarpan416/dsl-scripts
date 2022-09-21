@@ -157,4 +157,33 @@
         <var value="#{T(java.lang.Thread).sleep(#sleepDuration)}" />
     </method>
 
+    <!-- PARAMS:    getServiceBaseUrlResponse
+     -->
+    <method name="getServiceBaseUrl">
+        <var value="#{#getServiceBaseUrlResponse.put('baseUrl', 'https://cdd2-150-242-172-172.ap.ngrok.io/shopify')}" />
+    </method>
+
+    <!-- PARAMS:    requiredHeaders
+                    hostname
+                    locationId
+                    apiKey
+                    password
+                    tenantCode
+                    channelCode
+                    channelSourceCode
+     -->
+     <method name="getRequiredServiceRequestHeaders">
+        <var value="#{#requiredHeaders.put('hostname', #hostname )}" />
+        <var value="#{#requiredHeaders.put('location_id', #locationId )}" />
+        <var value="#{#requiredHeaders.put('username', #apiKey )}" />
+        <var value="#{#requiredHeaders.put('password', #password )}" />
+        <var value="#{#requiredHeaders.put('tenant_code', #tenantCode )}" />
+        <var value="#{#requiredHeaders.put('TenantCode', #tenantCode )}" />
+        <var value="#{#requiredHeaders.put('ChannelCode', #channelCode )}" />
+        <var value="#{#requiredHeaders.put('SourceCode', #channelSourceCode )}" />
+
+        <log level="info" value="requiredHeaders: #{#requiredHeaders.toString()}" />
+    </method>
+
+
 </scraper>
