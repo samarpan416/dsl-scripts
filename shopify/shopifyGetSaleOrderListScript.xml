@@ -27,27 +27,26 @@
 	<log level="info" value="#{#TAG} Fetching page : #{#pageNumber}" />
 
 	<var name="getServiceBaseUrlResponse" value="#{new java.util.HashMap()}" />
-
 	<invoke method="getServiceBaseUrl" script="shopifyUtils">
 		<param name="getServiceBaseUrlResponse" value="#{#getServiceBaseUrlResponse}" />
 	</invoke>
-
 	<var name="SHOPIFY_MS_BASE_URL" value="#{#getServiceBaseUrlResponse.get('baseUrl')}" />
 
 	<method name="prepareGetOrdersRequestHeaders">
-		<var name="tenantCode" value="#{T(com.uniware.core.utils.UserContext).current().tenant.code}" />
+		<var name="requiredHeaders" value="#{new java.util.HashMap()}" />
+        <invoke method="getRequiredServiceRequestHeaders" script="shopifyUtils">
+            <param name="requiredHeaders" value="#{#requiredHeaders}" />
+            <param name="hostname" value="#{#hostname}" />
+            <param name="locationId" value="#{#locationId}" />
+            <param name="apiKey" value="#{#apiKey}" />
+            <param name="password" value="#{#password}" />
+            <param name="tenantCode" value="#{T(com.uniware.core.utils.UserContext).current().tenant.code}" />
+            <param name="channelCode" value="#{#channel.code}" />
+            <param name="channelSourceCode" value="#{#channel.sourceCode}" />
+        </invoke>
 
 		<var name="getOrdersRequestHeaders" value="#{new java.util.HashMap()}" />
-		<var value="#{#getOrdersRequestHeaders.put('hostname', #hostname )}" />
-		<var value="#{#getOrdersRequestHeaders.put('location_id', #locationId )}" />
-		<var value="#{#getOrdersRequestHeaders.put('username', #apiKey )}" />
-		<var value="#{#getOrdersRequestHeaders.put('password', #password )}" />
-		<var value="#{#getOrdersRequestHeaders.put('tenant_code', #tenantCode )}" />
-		<var value="#{#getOrdersRequestHeaders.put('location_id', #locationId )}" />
-		<var value="#{#getOrdersRequestHeaders.put('TenantCode', #tenantCode )}" />
-		<var value="#{#getOrdersRequestHeaders.put('ChannelCode', #channel.code )}" />
-		<var value="#{#getOrdersRequestHeaders.put('SourceCode', #channel.sourceCode )}" />
-		<var value="#{#getOrdersRequestHeaders.put('Content-Type', 'application/json' )}" />
+		<var value="#{#getOrdersRequestHeaders.putAll(#requiredHeaders)}" />
 
 		<log level="info" value="getOrdersRequestHeaders: #{#getOrdersRequestHeaders.toString()}" />
 	</method>
