@@ -51,21 +51,29 @@
 		<log level="info" value="getOrdersRequestHeaders: #{#getOrdersRequestHeaders.toString()}" />
 	</method>
 
+	<method name="prepareGetOrdersRequestQueryParams" >
+		<var name="getOrdersRequestQueryParams" value="#{new java.util.HashMap()}" />
+		<var value="#{#getOrdersRequestQueryParams.put('pageSize','10')}" />
+		<log level="info" value="getOrdersRequestQueryParams: #{#getOrdersRequestQueryParams.toString()}" />
+	</method>
+
 	<method name="doGetOrdersRequest">
 		<http method="GET" url="#{#url}" var="getOrdersResponse" fetchStatusCode="true" fetchResponseHeaders="true">
 			<headers map="#{#getOrdersRequestHeaders}" />
+			<params map="#{#getOrdersRequestQueryParams}" />
 		</http>
 
 		<log level="info" value="getOrdersResponse: #{#getOrdersResponse} , getOrdersResponseHeaders: #{#getOrdersResponseHeaders.toString()} , getOrdersResponseCode: #{#getOrdersResponseResponseCode}" />
 	</method>
 
 	<method name="handleGetOrdersResponse">
+		<var name="getOrdersResponseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#getOrdersResponse)}" />
+		<var name="responseStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#getOrdersResponseJson, 'status')}" />
+		<var name="responseMessage" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#getOrdersResponseJson, 'message')}" />
+		<var name="responseErrors" value="#{#getOrdersResponseJson.get('errors')}" />
+		<log level="info" value="responseStatus: #{#responseStatus}" />
+
 		<if condition="#{#getOrdersResponseCode == 200}">
-			<var name="getOrdersResponseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#getOrdersResponse)}" />
-			<var name="responseStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#getOrdersResponseJson, 'status')}" />
-			<var name="responseMessage" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#getOrdersResponseJson, 'message')}" />
-			<var name="responseErrors" value="#{#getOrdersResponseJson.get('errors')}" />
-			<log level="info" value="responseStatus: #{#responseStatus}" />
 			<if condition="#{'success'.equals(#responseStatus)}">
 				<var name="responseStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#getOrdersResponseJson, 'status')}" />
 				<var name="orders" value="#{#getOrdersResponseJson.get('data')}" />
@@ -74,12 +82,9 @@
 				</else>
 			</if>
 			<else>
-				<if condition="#{#getOrdersResponseCode == 400}">
-					<log level="info" value="Error(s) in request | responseMessage: #{#responseMessage} | responseErrors: #{#responseErrors}" />
-					<else>
-						<log level="info" value="Error fetching orders" />
-					</else>
-				</if>
+				<var name="errorMessage" value="#{#responseMessage == null ? 'Error fetching orders' : #responseMessage}" />
+				<log level="info" value="Error fetching orders | responseErrors: #{#responseErrors.toString()}" />
+				<scriptError message="Error fetching orders" />
 			</else>
 		</if>
 	</method>
@@ -118,6 +123,7 @@
 	</if>
 
 	<invoke method="prepareGetOrdersRequestHeaders" />
+	<!-- <invoke method="prepareGetOrdersRequestQueryParams" /> -->
 
 	<invoke method="doGetOrdersRequest">
 		<param name="url" value="#{#url}" />
