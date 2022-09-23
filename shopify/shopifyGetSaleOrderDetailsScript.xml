@@ -202,13 +202,9 @@
 		</if>
 
 		<valueTag name="TotalShippingCharges" value="#{#shippingCharges}" />
-		<valueTag name="TotalCashOnDeliveryCharges" value="#{#codCharges!=null?#codCharges: T(com.unifier.core.utils.NumberUtils).newBigDecimal(0.00)}" />
-		<if condition="#{#giftDiscount instanceof T(java.lang.String)}">
-			<var name="prepaidAmount" value="#{new java.math.BigDecimal(#giftDiscount)}" />
-			<else>
-				<var name="prepaidAmount" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#giftDiscount)}" />
-			</else>
-		</if>
+		<valueTag name="TotalCashOnDeliveryCharges" value="#{#codCharges!=null ? #codCharges: T(com.unifier.core.utils.NumberUtils).newBigDecimal(0.00)}" />
+		<var name="prepaidAmount" value="#{#giftDiscount.add(#partiallyPaidAmount)}" />
+		
 		<var name="subtotal" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#saleOrderJson.get('total_line_items_price').getAsString())}" />
 		<var name="totalOrderAmount" value="#{#shippingCharges.add(#subtotal)}" />
 		<if condition="#{(#prepaidAmount.add(#discount)) &gt; #totalOrderAmount}">
@@ -305,66 +301,19 @@
 		<endTag name="CreateSaleOrderRequest" />
 	</method>
 
-	<var name="thirdPartyConfigurationEnabled" value="#{T(com.unifier.core.utils.StringUtils).isBlank(#apiKey)? true : false}" />
-	<if condition="#{#thirdPartyConfigurationEnabled}">
-		<var name="shopifyUrl" value="https://#{#hostname}/admin/api/2020-01" />
-		<!-- Retrieve details of an order -->
-		<http method="get" url="#{#shopifyUrl}/orders/#{#saleOrderCode}.json" var="saleOrderResponse">
-			<header name="X-Shopify-Access-Token" value="#{#token}" />
-		</http>
-		<var name="saleOrderJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#saleOrderResponse).get('order')}" />
-		<log level="info" value="Sale Order: #{#saleOrderJson.toString()}" />
+	<log level="debug" value="#{#TAG} SaleOrderDetailElement : #{#saleOrderDetailElement.toString()}" />
+	<var name="saleOrderJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#saleOrderDetailElement)}" />
+	<var name="cashOnDelivery" value="#{#saleOrderElement.attribute('cashOnDelivery')}" />
+	<var name="giftDiscount" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#saleOrderElement.attribute('giftDiscount'))}" />
+	<var name="partiallyPaidAmount" value="#{T(com.unifier.core.utils.NumberUtils).newBigDecimal(#saleOrderElement.attribute('partiallyPaidAmount'))}" />
 
-		<var name="cashOnDelivery" value="#{!#saleOrderJson.get('gateway').isJsonNull() and (#saleOrderJson.get('gateway').getAsString().contains('COD') or #saleOrderJson.get('gateway').getAsString().toLowerCase().contains('cash on delivery'))}" />
-
-		<http method="get" url="#{#shopifyUrl}/orders/#{#saleOrderCode}/transactions.json" var="saleOrderTransaction">
-			<header name="X-Shopify-Access-Token" value="#{#token}" />
-		</http>
-		<var name="saleOrderTransactionJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#saleOrderTransaction).get('transactions')}" />
-		<var name="giftDiscount" value="#{0}" />
-		<log level="info" value="Sale Transaction: #{#saleOrderTransactionJson.toString()}" />
-		<var name="saleOrderTransactionIterator" value="#{#saleOrderTransactionJson.getAsJsonArray().iterator()}" />
-		<while condition="#{#saleOrderTransactionIterator.hasNext()}">
-			<var name="saleOrderTransaction" value="#{#saleOrderTransactionIterator.next()}" />
-			<if condition="#{!#saleOrderTransaction.get('gateway').isJsonNull()}">
-				<var name="gateway" value="#{#saleOrderTransaction.get('gateway').getAsString()}" />
-				<if condition="#{#gateway=='gift_card'}">
-					<var name="giftDiscount" value="#{#saleOrderTransaction.get('amount').getAsDouble() + #giftDiscount}" />
-				</if>
-			</if>
-		</while>
-
-		<var name="defaultAddress" value="#{#saleOrderJson.get('customer') != null ? #saleOrderJson.get('customer').get('default_address') : null}" />
-		<var name="shippingAddress" value="#{#saleOrderJson.get('shipping_address') != null ? #saleOrderJson.get('shipping_address'): #defaultAddress }" />
-		<var name="billingAddress" value="#{#saleOrderJson.get('billing_address') != null ? #saleOrderJson.get('billing_address'): #defaultAddress != null ? #defaultAddress: #shippingAddress}" />
-		<if condition="#{#billingAddress == null or #shippingAddress == null}">
-			<scriptError message="Billing/Shipping addresses not found" />
-		</if>
-
-		<invoke method="addSaleOrder" />
-
-
-		<else>
-			<var name="shopifyUrl" value="https://#{#apiKey}:#{#password}@#{#hostname}/admin/api/2020-01" />
-			<retry delayInMillis="300" count="3">
-				<http method="get" url="#{#shopifyUrl}/orders/#{#saleOrderCode}.json" var="saleOrderResponse"></http>
-				<var name="saleOrderJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#saleOrderResponse).get('order')}" />
-				<log level="debug" value="Sale Order: #{#saleOrderJson.toString()}" />
-			</retry>
-
-			<var name="cashOnDelivery" value="#{#saleOrderElement.attribute('cashOnDelivery')}" />
-			<var name="giftDiscount" value="#{#saleOrderElement.attribute('giftDiscount')}" />
-
-			<var name="defaultAddress" value="#{#saleOrderJson.get('customer') != null ? #saleOrderJson.get('customer').get('default_address') : null}" />
-			<var name="shippingAddress" value="#{#saleOrderJson.get('shipping_address') != null ? #saleOrderJson.get('shipping_address'): #defaultAddress}" />
-			<var name="billingAddress" value="#{#saleOrderJson.get('billing_address') != null ? #saleOrderJson.get('billing_address'): #defaultAddress != null ? #defaultAddress: #shippingAddress}" />
-			<if condition="#{#billingAddress == null or #shippingAddress == null}">
-				<scriptError message="Billing/Shipping addresses not found" />
-			</if>
-
-			<invoke method="addSaleOrder" />
-
-		</else>
+	<var name="defaultAddress" value="#{#saleOrderJson.get('customer') != null ? #saleOrderJson.get('customer').get('default_address') : null}" />
+	<var name="shippingAddress" value="#{#saleOrderJson.get('shipping_address') != null ? #saleOrderJson.get('shipping_address'): #defaultAddress}" />
+	<var name="billingAddress" value="#{#saleOrderJson.get('billing_address') != null ? #saleOrderJson.get('billing_address'): #defaultAddress != null ? #defaultAddress: #shippingAddress}" />
+	<if condition="#{#billingAddress == null or #shippingAddress == null}">
+		<scriptError message="Billing/Shipping addresses not found" />
 	</if>
+
+	<invoke method="addSaleOrder" />
 
 </scraper>

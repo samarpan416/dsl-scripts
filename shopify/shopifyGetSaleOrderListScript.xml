@@ -1,162 +1,217 @@
 <scraper name="shopifyGetSaleOrderListScript" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.unicommerce.com/schema/scraper-1.0.xsd" cachehttpclient="false">
-	<!-- 
-        PARAMS: 
-                applicationContext
-                source
-                channel
-                customer
-                isFrequentOrderSync
-                pageNumber
-                metadata - Map<String,Object> (Stores nextPageUrl, authHeaders, url)
-                
-                # ChannelParams    
-                apiKey
-                hostname
-                password
-                locationId
-                token
-                applicableProvinceCodes - String (comma seperated province codes)
-                syncDraftOrders - Boolean
-    -->
 
-	<!-- In this version we get order on basis of parameter 
-            updated_at_min 
-            and 
-            fulfillment_status=unfulfilled(Returns orders with fulfillment_status of null or partial) 
-    -->
+	<!-- In this version we get order on basis of parameter created_at_min and fullfilment_status is fulfillment_status=unshipped,partial,null -->
 
-	<var name="TAG" value="" />
-	<log level="info" value="#{#TAG} Fetching page : #{#pageNumber}" />
-	<log level="info" value="#{#TAG} daysToFetchOrdersFor : #{#daysToFetchOrdersFor} day(s)" />
-	<var name="urlQueryParams" value="#{new java.util.HashMap()}" />
+	<log level="info" value="syncDraftOrders: #{#syncDraftOrders}" />
+	<log level="info" value="Fetching page: #{#pageNumber}" />
 	<var name="hasMoreOrders" value="#{false}" />
-	<var name="DAYS_TO_FETCH_ORDERS_FOR" value="#{(#daysToFetchOrdersFor != null) ? #daysToFetchOrdersFor : 25}" />
-	<log level="info" value="#{#TAG} DAYS_TO_FETCH_ORDERS_FOR : #{#DAYS_TO_FETCH_ORDERS_FOR} day(s)" />
+	<var name="dateFormat" value="yyyy-MM-dd%20HH:mm" />
+	<var name="DAYS_TO_FETCH_ORDERS_FOR" value="#{30}" />
+	<var name="createdAfter" value="#{T(com.unifier.core.utils.DateUtils).dateToString(T(com.unifier.core.utils.DateUtils).addToDate(T(com.unifier.core.utils.DateUtils).getCurrentDate(), 5, -1 * #DAYS_TO_FETCH_ORDERS_FOR),#dateFormat)}" />
 
-	<var name="LIMIT" value="200" />
-	<var name="updatedAfter" value="#{T(java.time.LocalDate).now().minusDays(#DAYS_TO_FETCH_ORDERS_FOR).toString()}" />
-	<var name="REQUEST_RETRIES_ALLOWED" value="#{1}" />
-	<!-- PARAMS:    requestRetryCount 
-                    REQUEST_RETRIES_ALLOWED
-                    url
-                    authHeaders
-                    urlQueryParams
-                    handlingInfo
-                    path
-        
-        RETURNS:    handlingInfo.responseJson
-    -->
-	<method name="executeRestRequest">
-		<!-- NOTE : Added to simplify usage of 'requestRetryCount' -->
-		<var name="requestRetryCount" value="#{(#requestRetryCount != null) ? #requestRetryCount : 0}" />
-		<http method="GET" url="#{#url}" var="response" fetchResponseHeaders="true" fetchStatusCode="true" cacheClient="false">
-			<header name="Content-Type" value="application/json" />
-			<headers map="#{#authHeaders}" />
-			<params map="#{#urlQueryParams}" />
-		</http>
-		<log level="info" value="#{#TAG} response : #{#response}" />
-		<log level="info" value="#{#TAG} responseHeaders : #{#responseHeaders.toString()}" />
-
-		<var name="responseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#response)}" />
-
-		<!-- <var name="handlingInfo" value="#{new java.util.HashMap()}" /> -->
-		<var value="#{#handlingInfo.put('requestRetryCount',#requestRetryCount)}" />
-		<var value="#{#handlingInfo.put('requestRetriesAllowed',#REQUEST_RETRIES_ALLOWED)}" />
-		<var value="#{#handlingInfo.put('responseJson',#responseJson)}" />
-		<var value="#{#handlingInfo.put('responseHeaders',#responseHeaders)}" />
-		<invoke method="handleHttpStatusCodes" script="shopifyUtils">
-			<param name="path" value="#{#path}" />
-			<param name="responseHeaders" value="#{#responseHeaders}" />
-			<param name="responseCode" value="#{#responseResponseCode}" />
-			<param name="responseJson" value="#{#responseJson}" />
-			<param name="handlingInfo" value="#{#handlingInfo}" />
-		</invoke>
-
-		<var name="shouldRetry" value="#{#handlingInfo.get('shouldRetry')}" />
-		<var name="sleepInterval" value="#{#handlingInfo.get('sleepInterval')}" />
-		<!-- Retry if needed -->
-		<while condition="#{#shouldRetry == true}">
-			<log level="info" value="#{#TAG} Retrying #{#path} request after #{#sleepInterval}ms" />
-			<var value="#{T(java.lang.Thread).sleep(#sleepInterval)}" />
-			<invoke method="executeRestRequest">
-				<param name="url" value="#{#url}" />
-				<param name="urlQueryParams" value="#{#urlQueryParams}" />
-				<param name="authHeaders" value="#{#authHeaders}" />
-				<param name="handlingInfo" value="#{#handlingInfo}" />
-				<param name="requestRetryCount" value="#{#handlingInfo.get('requestRetryCount')}" />
-				<param name="REQUEST_RETRIES_ALLOWED" value="#{#REQUEST_RETRIES_ALLOWED}" />
-				<param name="path" value="#{#path}" />
-			</invoke>
-		</while>
+	<method name="getPageInfo">
+		<if condition="#{#link != null}">
+			<var name="linkArray" value="#{#link.split(',')}" />
+			<var name="relnext" value="#{ (#linkArray.length &gt; 1) ? #linkArray[1]: #linkArray[0] }" />
+			<!-- extract  next page url from relnext -->
+			<var name="pattern" value="#{'(?&lt;=page_info=)(.*)(?=&gt;; rel=&#34;next&#34;)'}" /> <!-- &#34; is for " (Quotation mark)-->
+			<var name="matcher" value="#{T(java.util.regex.Pattern).compile(#pattern).matcher(#relnext)}" />
+			<while condition="#{#matcher.find()}">
+				<var name="pageInfo" value="#{#matcher.group()}" />
+			</while>
+		</if>
 	</method>
 
-
-	<if condition="#{#pageNumber eq 1}">
-		<var name="authHeadersAndUrl" value="#{new java.util.HashMap()}" />
-		<var name="channelConnectorParams" value="#{new java.util.HashMap()}" />
-		<var value="#{#channelConnectorParams.put('apiKey',#apiKey)}" />
-		<var value="#{#channelConnectorParams.put('password',#password)}" />
-		<var value="#{#channelConnectorParams.put('accessToken',#token)}" />
-		<var value="#{#channelConnectorParams.put('hostname',#hostname)}" />
-
-		<invoke method="getAuthHeadersAndUrl" script="shopifyUtils">
-			<param name="channelConnectorParams" value="#{#channelConnectorParams}" />
-			<param name="authHeadersAndUrl" value="#{#authHeadersAndUrl}" />
-		</invoke>
-		<var name="url" value="#{#authHeadersAndUrl.get('url')}" />
-		<var name="authHeaders" value="#{#authHeadersAndUrl.get('authHeaders')}" />
-		<log level="info" value="#{#TAG} url : #{#url}, authHeaders : #{#authHeaders.toString()}" />
-		<var name="getOrdersURL" value="#{#url}/orders.json" />
-		<var value="#{#urlQueryParams.put('limit', #LIMIT )}" />
-		<var value="#{#urlQueryParams.put('fulfillment_status', 'unfulfilled' )}" />
-		<var value="#{#urlQueryParams.put('updated_at_min', #updatedAfter )}" />
-
-		<!-- Set url and authHeaders in metadata which will be used for fetching the following pages -->
-		<var value="#{#metadata.put('url', #url)}" />
-		<var value="#{#metadata.put('authHeaders', #authHeaders)}" />
-
+	<if condition="#{#applicableProvinceCodes != null}">
+		<try>
+			<var name="provinces" value="#{#applicableProvinceCodes.split(',')}" />
+			<var name="allowedProvinceCodesList" value="#{new java.util.ArrayList()}" />
+			<var value="#{#allowedProvinceCodesList.addAll(#provinces)}" />
+			<catch>
+				<scriptError message="Invalid applicableProvinceCodes: #{#applicableProvinceCodes}" />
+			</catch>
+		</try>
 		<else>
-			<var name="url" value="#{#metadata.get('url')}" />
-			<var name="authHeaders" value="#{#metadata.get('authHeaders')}" />
-			<var name="getOrdersURL" value="#{#url}/orders.json" />
-			<var value="#{#urlQueryParams.put('limit', #LIMIT )}" />
-			<var value="#{#urlQueryParams.put('page_info', #metadata.get('pageInfo') )}" />
-			<var value="#{#metadata.remove('pageInfo')}" />
+			<var name="allowedProvinceCodesList" value="#{null}" />
 		</else>
 	</if>
 
+	<var name="authHeadersAndUrl" value="#{new java.util.HashMap()}" />
+	<var name="channelConnectorParams" value="#{new java.util.HashMap()}" />
+	<var value="#{#channelConnectorParams.put('apiKey',#apiKey)}" />
+	<var value="#{#channelConnectorParams.put('password',#password)}" />
+	<var value="#{#channelConnectorParams.put('accessToken',#token)}" />
+	<var value="#{#channelConnectorParams.put('hostname',#hostname)}" />
 
-	<var name="handlingInfo" value="#{new java.util.HashMap()}" />
-	<invoke method="executeRestRequest">
-		<param name="REQUEST_RETRIES_ALLOWED" value="#{#REQUEST_RETRIES_ALLOWED}" />
-		<param name="url" value="#{#getOrdersURL}" />
-		<param name="authHeaders" value="#{#authHeaders}" />
-		<param name="urlQueryParams" value="#{#urlQueryParams}" />
-		<param name="handlingInfo" value="#{#handlingInfo}" />
-		<param name="path" value="/orders.json" />
+	<invoke method="getAuthHeadersAndUrl" script="shopifyUtils">
+		<param name="channelConnectorParams" value="#{#channelConnectorParams}" />
+		<param name="authHeadersAndUrl" value="#{#authHeadersAndUrl}" />
 	</invoke>
+	<var name="baseUrl" value="#{#authHeadersAndUrl.get('url')}" />
+	<var name="authHeaders" value="#{#authHeadersAndUrl.get('authHeaders')}" />
+	<log level="info" value="#{#TAG} baseUrl : #{#baseUrl}, authHeaders : #{#authHeaders.toString()}" />
 
-	<var name="saleOrderListJson" value="#{#handlingInfo.get('responseJson')}" />
-	<var name="saleOrderListResponseHeaders" value="#{#handlingInfo.get('responseHeaders')}" />
+	<if condition="#{#pageNumber eq 1}">
+		<var name="getOrdersURL" value="#{#baseUrl}/orders.json?limit=200&amp;fulfillment_status=unshipped,partial,null&amp;created_at_min=#{#createdAfter}" />
+		<else>
+			<var name="getOrdersURL" value="#{#metadata.get('nextPageUrl')}" />
+			<var value="#{#metadata.remove('nextPageUrl')}" />
+		</else>
+	</if>
 
-	<var name="link" value="#{#saleOrderListResponseHeaders.get('Link')}" />
-	<invoke method="getNextPageInfo" script="shopifyUtils">
-		<param name="link" value="#{#link}" />
-		<param name="metadata" value="#{#metadata}" />
+	<http method="get" url="#{#getOrdersURL}" fetchResponseHeaders="true" var="saleOrderListResponse">
+		<headers map="#{#authHeaders}" />
+	</http>
+	<log level="info" value="saleOrderListResponse: #{#saleOrderListResponse} , saleOrderListResponseHeaders: #{#saleOrderListResponseHeaders.toString()}" />
+	<try>
+		<var name="saleOrderListJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#saleOrderListResponse)}" />
+		<if condition="#{#saleOrderListJson.get('errors') != null}">
+			<scriptError message="Unable to login with the given credentials, please check if username and password are correct" />
+		</if>
+		<catch>
+			<scriptError message="Unable to login with the given credentials, please check if username and password are correct" />
+		</catch>
+	</try>
+
+	<invoke method="getPageInfo">
+		<param name="link" value="#{#saleOrderListResponseHeaders.get('Link')}" />
 	</invoke>
-	<var name="pageInfo" value="#{#metadata.get('pageInfo')}" />
+	<!-- set next Page Url page info in metadata -->
 	<if condition="#{T(com.unifier.core.utils.StringUtils).isNotBlank(#pageInfo)}">
+		<var name="nextPageUrl" value="#{#baseUrl}/orders.json?limit=200&amp;page_info=#{#pageInfo}" />
+		<var value="#{#metadata.put('nextPageUrl', #nextPageUrl)}" />
 		<var name="hasMoreOrders" value="#{true}" />
 	</if>
-	<log level="info" value="#{#TAG} hasMoreOrders : #{#hasMoreOrders}" />
-	<var name="saleOrderIterator" value="#{#saleOrderListJson.get('orders').getAsJsonArray().iterator()}" />
+
 	<startTag name="SaleOrders" />
+	<var name="saleOrderIterator" value="#{#saleOrderListJson.get('orders').getAsJsonArray().iterator()}" />
 	<while condition="#{#saleOrderIterator.hasNext()}">
 		<var name="saleOrderJson" value="#{#saleOrderIterator.next()}" />
-		<var name="saleOrderId" value="#{#saleOrderJson.get('id').getAsString()}" />
-		<log level="info" value="#{#TAG} Adding SaleOrder : #{#saleOrderId}" />
-		<var value="#{#resultItems.put(#saleOrderId,#saleOrderJson.toString())}" />
-		<valueTag name="SaleOrder" value="#{#saleOrderId}" />
+		<var name="saleOrderCode" value="#{#saleOrderJson.get('id').getAsString()}" />
+		<log level="info" value="[SHOPIFY] saleOrderCode : #{#saleOrderCode}" />
+		<try>
+			<var name="provinceCode" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderJson.get('billing_address'),'province_code')}" />
+			<catch>
+				<log level="info" value="[SHOPIFY] saleOrderCode : #{#saleOrderCode}" />
+			</catch>
+		</try>
+		<var name="isSaleOrderConfirmed" value="#{#saleOrderJson.get('confirmed').getAsBoolean()}" />
+		<var name="fulfillmentStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderJson , 'fulfillment_status')}" />
+
+		<if condition="#{
+							#isSaleOrderConfirmed and 
+							(
+								#saleOrderJson.get('fulfillment_status').isJsonNull() or 
+								#saleOrderJson.get('fulfillment_status').getAsString().equals('null') or 
+								#saleOrderJson.get('fulfillment_status').getAsString().equals('partial')
+							)
+						}">
+			<retry delayInMillis="500" count="3">
+				<http method="get" url="#{#baseUrl}/orders/#{#saleOrderCode}/transactions.json" var="transactionsResponse">
+					<headers map="#{#authHeaders}" />
+				</http>
+				<var name="transactionJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#transactionsResponse).get('transactions')}" />
+				<var name="saleOrderTransactionIterator" value="#{#transactionJson.getAsJsonArray().iterator()}" />
+			</retry>
+
+			<var name="cashOnDelivery" value="#{false}" />
+			<var name="giftDiscount" value="#{T(java.math.BigDecimal).ZERO}" />
+			<var name="partiallyPaidAmount" value="#{T(java.math.BigDecimal).ZERO}" />
+			<var name="partiallyPaidTransactionFound" value="#{false}" />
+			<var name="giftDiscountTransactionFound" value="#{false}" />
+			<var name="financialStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderJson, 'financial_status')}" />
+
+			<while condition="#{#saleOrderTransactionIterator.hasNext()}">
+				<var name="saleOrderTransaction" value="#{#saleOrderTransactionIterator.next()}" />
+				<log level="debug" value="saleOrderTransaction: #{#saleOrderTransaction.toString()}" />
+
+				<var name="transactionId" value="#{#saleOrderTransaction.get('id').getAsString()}" />
+				<var name="transactionStatus" value="#{#saleOrderTransaction.get('status').getAsString()}" />
+				<var name="transactionGateway" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#saleOrderTransaction, 'gateway')}" />
+
+				<if condition="#{
+									!#saleOrderTransaction.get('gateway').isJsonNull() and 
+									(
+										#transactionStatus.toLowerCase().contains('pending') or 
+										#transactionStatus.toLowerCase().contains('success')
+									)
+								}">
+					<if condition="#{'partially_paid'.equalsIgnoreCase(#financialStatus)}">
+						<var name="cashOnDelivery" value="#{true}" />
+						<else>
+							<if condition="#{
+											#transactionGateway.contains('COD') or 
+											#transactionGateway.toLowerCase().contains('cash on delivery') or 
+											#transactionGateway.toLowerCase().contains('cash_on_delivery') or 
+											(
+												#syncDraftOrders=='true' and 
+												#transactionGateway.toLowerCase().contains('manual')  and 
+												!(
+													!#saleOrderJson.get('financial_status').isJsonNull() and 
+													#saleOrderJson.get('financial_status').getAsString().toLowerCase().equals('paid')
+													)
+													)
+												}">
+								<var name="cashOnDelivery" value="#{true}" />
+								<else>
+									<var name="cashOnDelivery" value="#{false}" />
+								</else>
+							</if>
+						</else>
+					</if>
+					
+					<if condition="#{'SUCCESS'.equalsIgnoreCase(#transactionStatus)}">
+						<var name="transactionAmount" value="#{#saleOrderTransaction.get('amount').getAsBigDecimal()}" />
+						<if condition="#{'gift_card'.equals(#transactionGateway)}">
+							<var name="giftDiscountTransactionFound" value="#{true}" />
+							<var name="transactionKind" value="#{#saleOrderTransaction.get('kind').getAsString()}" />
+							<var name="giftDiscount" value="#{'REFUND'.equalsIgnoreCase(#transactionKind) ? #giftDiscount.subtract(#transactionAmount) : #giftDiscount.add(#transactionAmount)}" />
+						</if>
+						<if condition="#{'partially_paid'.equals(#transactionGateway)}">
+							<var name="partiallyPaidTransactionFound" value="#{true}" />
+							<var name="partiallyPaidAmount" value="#{#partiallyPaidAmount.add(#transactionAmount)}" />
+						</if>
+					</if>
+					<else>
+						<log level="info" value="saleOrderCode: #{#saleOrderCode} | Skipping transaction #{#transactionId} , transactionStatus: #{#transactionStatus} , transactionGateway: #{#transactionGateway}" />
+					</else>
+				</if>
+			</while>
+
+			<log level="info" value="saleOrderCode: #{#saleOrderCode} | cashOnDelivery: #{#cashOnDelivery} , giftDiscount: #{#giftDiscount} , partiallyPaidAmount: #{#partiallyPaidAmount} , giftDiscountTransactionFound: #{#giftDiscountTransactionFound} , partiallyPaidTransactionFound: #{#partiallyPaidTransactionFound}" />
+
+			<if condition="#{'partially_paid'.equalsIgnoreCase(#financialStatus) and !#giftDiscountTransactionFound and !#partiallyPaidTransactionFound}">
+				<log level="info" value="Skipping order #{#saleOrderCode} since no transaction found with gateway partially_paid or gift_card" />
+				<else>
+					<if condition="#{
+								(
+									#cashOnDelivery or 
+									(
+										!#saleOrderJson.get('financial_status').isJsonNull() and 
+										#saleOrderJson.get('financial_status').getAsString().toLowerCase().equals('paid')
+									)
+								)  and 
+								(
+									#allowedProvinceCodesList == null or 
+									#allowedProvinceCodesList.contains(#provinceCode)
+								)
+							}">
+						<valueTag name="SaleOrder" value="#{#saleOrderCode}">
+							<attribute name="cashOnDelivery" value="#{#cashOnDelivery}" />
+							<attribute name="giftDiscount" value="#{#giftDiscount}" />
+							<attribute name="partiallyPaidAmount" value="#{#partiallyPaidAmount}" />
+						</valueTag>
+						<var value="#{#resultItems.put(#saleOrderCode, #saleOrderJson.toString())}" />
+						<else>
+							<log level="info" value="[Invalid financial status] Skipping sale order #{#saleOrderCode} , financialStatus: #{#financialStatus}" />
+						</else>
+					</if>
+				</else>
+			</if>
+			<else>
+				<log level="info" value="[Invalid fulfillment status] Skipping sale order #{#saleOrderCode} , fulfillmentStatus: #{#fulfillmentStatus} , isSaleOrderConfirmed: #{#isSaleOrderConfirmed}" />
+			</else>
+		</if>
 	</while>
 	<if condition="#{#hasMoreOrders}">
 		<valueTag name="TotalPages" value="#{#pageNumber + 1}" />
@@ -165,6 +220,5 @@
 		</else>
 	</if>
 	<endTag name="SaleOrders" />
-
 
 </scraper>
