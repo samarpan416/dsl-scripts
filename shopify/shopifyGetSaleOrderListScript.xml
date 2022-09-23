@@ -34,33 +34,59 @@
 
 	<method name="prepareGetOrdersRequestHeaders">
 		<var name="requiredHeaders" value="#{new java.util.HashMap()}" />
-        <invoke method="getRequiredServiceRequestHeaders" script="shopifyUtils">
-            <param name="requiredHeaders" value="#{#requiredHeaders}" />
-            <param name="hostname" value="#{#hostname}" />
-            <param name="locationId" value="#{#locationId}" />
-            <param name="apiKey" value="#{#apiKey}" />
-            <param name="password" value="#{#password}" />
-            <param name="tenantCode" value="#{T(com.uniware.core.utils.UserContext).current().tenant.code}" />
-            <param name="channelCode" value="#{#channel.code}" />
-            <param name="channelSourceCode" value="#{#channel.sourceCode}" />
-        </invoke>
+		<invoke method="getRequiredServiceRequestHeaders" script="shopifyUtils">
+			<param name="requiredHeaders" value="#{#requiredHeaders}" />
+			<param name="hostname" value="#{#hostname}" />
+			<param name="locationId" value="#{#locationId}" />
+			<param name="apiKey" value="#{#apiKey}" />
+			<param name="password" value="#{#password}" />
+			<param name="tenantCode" value="#{T(com.uniware.core.utils.UserContext).current().tenant.code}" />
+			<param name="channelCode" value="#{#channel.code}" />
+			<param name="channelSourceCode" value="#{#channel.sourceCode}" />
+		</invoke>
 
 		<var name="getOrdersRequestHeaders" value="#{new java.util.HashMap()}" />
 		<var value="#{#getOrdersRequestHeaders.putAll(#requiredHeaders)}" />
+		<var value="#{#getOrdersRequestHeaders.put('Content-Type', 'application/json')}" />
 
 		<log level="info" value="getOrdersRequestHeaders: #{#getOrdersRequestHeaders.toString()}" />
 	</method>
 
-	<method name="prepareGetOrdersRequestQueryParams" >
+	<method name="prepareGetOrdersRequestQueryParams">
 		<var name="getOrdersRequestQueryParams" value="#{new java.util.HashMap()}" />
 		<var value="#{#getOrdersRequestQueryParams.put('pageSize','10')}" />
 		<log level="info" value="getOrdersRequestQueryParams: #{#getOrdersRequestQueryParams.toString()}" />
 	</method>
 
+	<method name="prepareGetOrdersRequestBody">
+		<var name="getOrdersRequestMap" value="#{new java.util.HashMap()}" />
+		<var name="configurationParameters" value="#{new java.util.HashMap()}" />
+		<var name="connectorParameters" value="#{new java.util.HashMap()}" />
+
+		<var value="#{#configurationParameters.put('applicableProvinceCodes', #applicableProvinceCodes)}" />
+		<var value="#{#configurationParameters.put('stateCodeRequired', #stateCodeRequired)}" />
+		<var value="#{#configurationParameters.put('customFieldsCustomization', #customFieldsCustomization)}" />
+		<var value="#{#configurationParameters.put('enablePOS', #enablePOS)}" />
+
+		<var value="#{#connectorParameters.put('apiKey', #apiKey)}" />
+		<var value="#{#connectorParameters.put('hostname', #hostname)}" />
+		<var value="#{#connectorParameters.put('password', #password)}" />
+		<var value="#{#connectorParameters.put('accessToken', #accessToken)}" />
+		<var value="#{#connectorParameters.put('prefix', #prefix)}" />
+		<var value="#{#connectorParameters.put('locationId', #locationId)}" />
+
+		<var value="#{#getOrdersRequestMap.put('configurationParameters', #configurationParameters)}" />
+		<var value="#{#getOrdersRequestMap.put('connectorParameters', #connectorParameters)}" />
+
+		<var name="getOrdersRequestBody" value="#{T(com.unifier.core.utils.JsonUtils).objectToString(#getOrdersRequestMap, true)}" />
+		<log level="info" value="getOrdersRequestBody: #{#getOrdersRequestBody}" />
+	</method>
+
 	<method name="doGetOrdersRequest">
-		<http method="GET" url="#{#url}" var="getOrdersResponse" fetchStatusCode="true" fetchResponseHeaders="true">
+		<http method="POST" url="#{#url}" var="getOrdersResponse" fetchStatusCode="true" fetchResponseHeaders="true">
 			<headers map="#{#getOrdersRequestHeaders}" />
 			<params map="#{#getOrdersRequestQueryParams}" />
+			<body>#{#getOrdersRequestBody}</body>
 		</http>
 
 		<log level="info" value="getOrdersResponse: #{#getOrdersResponse} , getOrdersResponseHeaders: #{#getOrdersResponseHeaders.toString()} , getOrdersResponseCode: #{#getOrdersResponseResponseCode}" />
@@ -76,7 +102,7 @@
 		<if condition="#{#getOrdersResponseCode == 200}">
 			<if condition="#{'success'.equals(#responseStatus)}">
 				<var name="responseStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#getOrdersResponseJson, 'status')}" />
-				<var name="orders" value="#{#getOrdersResponseJson.get('data')}" />
+				<var name="orderIdToWsSaleOrder" value="#{#getOrdersResponseJson.get('data')}" />
 				<else>
 					<log level="info" value="responseStatus: #{#responseStatus} is not success" />
 				</else>
@@ -89,23 +115,22 @@
 		</if>
 	</method>
 
-	<method name="addSaleOrders" >
-		<if condition="#{#orders == null or #orders.isJsonNull() or !#orders.isJsonArray()}">
+	<method name="addSaleOrders">
+		<if condition="#{#orderIdToWsSaleOrder == null or #orderIdToWsSaleOrder.isJsonNull() or !#orderIdToWsSaleOrder.isJsonObject()}">
 			<log level="info" value="Invalid data in getOrdersResponse" />
 			<else>
-				<var name="ordersItr" value="#{#orders.iterator()}" />
-				<while condition="#{#ordersItr.hasNext()}">
-					<var name="order" value="#{#ordersItr.next()}" />
-					<var name="orderId" value="#{#order.get('id').getAsString()}" />
+				<foreach collection="#{#orderIdToWsSaleOrder.entrySet()}" var="orderIdToWsSaleOrderEntry">
+					<var name="orderId" value="#{#orderIdToWsSaleOrderEntry.getKey()}" />
+					<var name="wsSaleOrder" value="#{#orderIdToWsSaleOrderEntry.getValue()}" />
 					<log level="info" value="Adding order #{#orderId}" />
 					<valueTag name="SaleOrder" value="#{#orderId}" />
-					<var value="#{#resultItems.put(#orderId, #order.toString())}" />
-				</while>
+					<var value="#{#resultItems.put(#orderId, #wsSaleOrder.toString())}" />
+				</foreach>
 			</else>
 		</if>
 	</method>
 
-	<method name="getTotalPages" >
+	<method name="getTotalPages">
 		<var name="totalPages" value="#{#pageNumber}" />
 
 		<var name="nextPageUrl" value="#{#getOrdersResponseHeaders.get('Link')}" />
@@ -123,7 +148,8 @@
 	</if>
 
 	<invoke method="prepareGetOrdersRequestHeaders" />
-	<!-- <invoke method="prepareGetOrdersRequestQueryParams" /> -->
+	<invoke method="prepareGetOrdersRequestQueryParams" />
+	<invoke method="prepareGetOrdersRequestBody" />
 
 	<invoke method="doGetOrdersRequest">
 		<param name="url" value="#{#url}" />
@@ -134,7 +160,7 @@
 	</invoke>
 
 	<startTag name="SaleOrders" />
-		<invoke method="addSaleOrders" >
+		<invoke method="addSaleOrders">
 			<param name="orders" value="#{#orders}" />
 		</invoke>
 		<invoke method="getTotalPages" />

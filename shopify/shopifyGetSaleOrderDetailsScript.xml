@@ -1,69 +1,17 @@
 <scraper name="shopifyGetSaleOrderDetailsScript" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.unicommerce.com/schema/scraper-1.0.xsd" cachehttpclient="false">
 	<log level="debug" value="#{#TAG} SaleOrderDetailElement : #{#saleOrderDetailElement.toString()}" />
 
-	<var name="SHOPIFY_MS_BASE_URL" value="https://3b03-103-248-87-34.in.ngrok.io/shopify" />
-
-	<method name="prepareGetWsSaleOrderRequestBody">
-		<var name="getWsSaleOrderRequestMap" value="#{new java.util.HashMap()}" />
-		<var name="configurationParameters" value="#{new java.util.HashMap()}" />
-		<var name="connectorParameters" value="#{new java.util.HashMap()}" />
-
-		<var value="#{#configurationParameters.put('applicableProvinceCodes', #applicableProvinceCodes)}" />
-		<var value="#{#configurationParameters.put('stateCodeRequired', #stateCodeRequired)}" />
-		<var value="#{#configurationParameters.put('customFieldsCustomization', #customFieldsCustomization)}" />
-		<var value="#{#configurationParameters.put('enablePOS', #enablePOS)}" />
-
-		<var value="#{#connectorParameters.put('apiKey', #apiKey)}" />
-		<var value="#{#connectorParameters.put('hostname', #hostname)}" />
-		<var value="#{#connectorParameters.put('password', #password)}" />
-		<var value="#{#connectorParameters.put('accessToken', #accessToken)}" />
-		<var value="#{#connectorParameters.put('prefix', #prefix)}" />
-
-		<var value="#{#getWsSaleOrderRequestMap.put('orderId', #saleOrderCode)}" />
-		<var value="#{#getWsSaleOrderRequestMap.put('order', T(com.unifier.core.utils.JsonUtils).jsonToMap(#saleOrderDetailElement))}" />
-		<var value="#{#getWsSaleOrderRequestMap.put('configurationParameters', #configurationParameters)}" />
-		<var value="#{#getWsSaleOrderRequestMap.put('connectorParameters', #connectorParameters)}" />
-
-		<var name="getWsSaleOrderRequestBody" value="#{T(com.unifier.core.utils.JsonUtils).objectToString(#getWsSaleOrderRequestMap, true)}" />
-		<log level="info" value="getWsSaleOrderRequestBody: #{#getWsSaleOrderRequestBody}" />
-	</method>
-
-	<method name="prepareGetWsSaleOrderRequestHeaders">
-		<var name="requiredHeaders" value="#{new java.util.HashMap()}" />
-        <invoke method="getRequiredServiceRequestHeaders" script="shopifyUtils">
-            <param name="requiredHeaders" value="#{#requiredHeaders}" />
-            <param name="hostname" value="#{#hostname}" />
-            <param name="locationId" value="#{#locationId}" />
-            <param name="apiKey" value="#{#apiKey}" />
-            <param name="password" value="#{#password}" />
-            <param name="tenantCode" value="#{T(com.uniware.core.utils.UserContext).current().tenant.code}" />
-            <param name="channelCode" value="#{#channel.code}" />
-            <param name="channelSourceCode" value="#{#channel.sourceCode}" />
-        </invoke>
-
-		<var name="getWsSaleOrderRequestHeaders" value="#{new java.util.HashMap()}" />
-		<var value="#{#getWsSaleOrderRequestHeaders.putAll(#requiredHeaders)}" />
-		<var value="#{#getWsSaleOrderRequestHeaders.put('Content-Type', 'application/json' )}" />
-
-		<log level="info" value="getWsSaleOrderRequestHeaders: #{#getWsSaleOrderRequestHeaders.toString()}" />
-	</method>
-
-	<method name="doGetWsSaleOrderRequest">
-		<http method="POST" url="#{#SHOPIFY_MS_BASE_URL}/ws-sale-order" var="getWsSaleOrderResponse" fetchStatusCode="true">
-			<headers map="#{#getWsSaleOrderRequestHeaders}" />
-			<body>#{#getWsSaleOrderRequestBody}</body>
-		</http>
-
-		<log level="info" value="getWsSaleOrderResponse: #{#getWsSaleOrderResponse}" />
-	</method>
-
 	<method name="prepareCustomFieldXML">
 		<startTag name="CustomFields" />
-		<startTag name="CustomField">
-			<attribute name="name" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#customField, 'name')}" />
-			<attribute name="value" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#customField, 'value')}" />
-		</startTag>
-		<endTag name="CustomField" />
+			<var name="customFieldValuesItr" value="#{#customFieldValues.iterator()}" />
+			<while condition="#{#customFieldValuesItr.hasNext()}">
+				<var name="customField" value="#{#customFieldValuesItr.next()}" />
+				<startTag name="CustomField">
+					<attribute name="name" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#customField, 'name')}" />
+					<attribute name="value" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#customField, 'value')}" />
+				</startTag>
+				<endTag name="CustomField" />
+			</while>
 		<endTag name="CustomFields" />
 	</method>
 
@@ -107,8 +55,8 @@
 		<valueTag name="Code" value="#{#wsSaleOrder.get('code').getAsString()}" />
 		<valueTag name="CashOnDelivery" value="#{#wsSaleOrder.get('cashOnDelivery').getAsBoolean()}" />
 		<valueTag name="DisplayOrderCode" value="#{#wsSaleOrder.get('displayOrderCode').getAsString()}" />
-		<valueTag name="AdditionalInfo" value="#{#wsSaleOrder.get('additionalInfo').getAsString()}" />
-		<valueTag name="TransactionId" value="#{#wsSaleOrder.get('transactionId').getAsString()}" />
+		<valueTag name="AdditionalInfo" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#wsSaleOrder, 'additionalInfo')}" />
+		<valueTag name="TransactionId" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#wsSaleOrder, 'transactionId')}" />
 		<valueTag name="PaymentMode" value="#{#wsSaleOrder.get('paymentMode').getAsString()}" />
 		<valueTag name="TransactionDate" value="#{#wsSaleOrder.get('transactionDate').getAsString()}" />
 		<valueTag name="DisplayOrderDateTime" value="#{#wsSaleOrder.get('displayOrderDateTime').getAsString()}" cdata="true" />
@@ -150,62 +98,18 @@
 			</invoke>
 		</while>
 		<endTag name="SaleOrderItems" />
-		<if condition="#{#wsSaleOrder.get('totalDiscount') != null and !#wsSaleOrder.get('totalDiscount').isJsonNull()}" >
+		<if condition="#{#wsSaleOrder.get('totalDiscount') != null and !#wsSaleOrder.get('totalDiscount').isJsonNull()}">
 			<valueTag name="TotalDiscount" value="#{#wsSaleOrder.get('totalDiscount').getAsBigDecimal()}" />
 		</if>
-		<var name="customFieldValuesItr" value="#{#wsSaleOrder.get('customFieldValues').getAsJsonArray().iterator()}" />
-		<while condition="#{#customFieldValuesItr.hasNext()}">
-			<var name="customField" value="#{#customFieldValuesItr.next()}" />
-			<invoke method="prepareCustomFieldXML">
-				<param name="customField" value="#{#customField}" />
-			</invoke>
-		</while>
+		<invoke method="prepareCustomFieldXML">
+			<param name="customFieldValues" value="#{#wsSaleOrder.get('customFieldValues').getAsJsonArray()}" />
+		</invoke>
 
 		<endTag name="SaleOrder" />
 		<endTag name="CreateSaleOrderRequest" />
 	</method>
 
-	<method name="handleGetWsSaleOrderResponse">
-		<if condition="#{#getWsSaleOrderResponseCode == 200}">
-			<var name="getWsSaleOrderResponseJson" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#getWsSaleOrderResponse)}" />
-			<var name="responseStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#getWsSaleOrderResponseJson, 'status')}" />
-			<var name="responseMessage" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#getWsSaleOrderResponseJson, 'message')}" />
-			<var name="responseErrors" value="#{#getWsSaleOrderResponseJson.get('errors')}" />
-			<log level="info" value="responseStatus: #{#responseStatus}" />
-			<if condition="#{'success'.equals(#responseStatus)}">
-				<var name="responseStatus" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#getWsSaleOrderResponseJson, 'status')}" />
-				<var name="wsSaleOrder" value="#{#getWsSaleOrderResponseJson.get('data')}" />
-				<if condition="#{#wsSaleOrder != null}">
-					<invoke method="prepareCreateSaleOrderRequestXML">
-						<param name="wsSaleOrder" value="#{#wsSaleOrder}" />
-					</invoke>
-					<else>
-						<log level="info" value="wsSaleOrder is null" />
-					</else>
-				</if>
-				<else>
-					<log level="info" value="responseStatus: #{#responseStatus} is not success" />
-				</else>
-			</if>
-			<else>
-				<if condition="#{#getWsSaleOrderResponseCode == 400}">
-					<log level="info" value="Error(s) in request payload | responseMessage: #{#responseMessage} | responseErrors: #{#responseErrors}" />
-					<else>
-						<log level="info" value="Error fetching wsSaleOrder for #{#saleOrderCode}" />
-					</else>
-				</if>
-			</else>
-		</if>
-	</method>
-
-	<invoke method="prepareGetWsSaleOrderRequestBody" />
-	<invoke method="prepareGetWsSaleOrderRequestHeaders" />
-	<invoke method="doGetWsSaleOrderRequest">
-		<param name="getWsSaleOrderRequestBody" value="#{#getWsSaleOrderRequestBody}" />
-		<param name="getWsSaleOrderRequestHeaders" value="#{#getWsSaleOrderRequestHeaders}" />
-	</invoke>
-	<invoke method="handleGetWsSaleOrderResponse">
-		<param name="getWsSaleOrderResponse" value="#{#getWsSaleOrderResponse}" />
-		<param name="getWsSaleOrderResponseCode" value="#{#getWsSaleOrderResponseResponseCode}" />
+	<invoke method="prepareCreateSaleOrderRequestXML">
+		<param name="wsSaleOrder" value="#{T(com.unifier.core.utils.JsonUtils).stringToJson(#saleOrderDetailElement)}" />
 	</invoke>
 </scraper>
