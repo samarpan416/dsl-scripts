@@ -3,15 +3,15 @@
 
 	<method name="prepareCustomFieldXML">
 		<startTag name="CustomFields" />
-			<var name="customFieldValuesItr" value="#{#customFieldValues.iterator()}" />
-			<while condition="#{#customFieldValuesItr.hasNext()}">
-				<var name="customField" value="#{#customFieldValuesItr.next()}" />
-				<startTag name="CustomField">
-					<attribute name="name" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#customField, 'name')}" />
-					<attribute name="value" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#customField, 'value')}" />
-				</startTag>
-				<endTag name="CustomField" />
-			</while>
+		<var name="customFieldValuesItr" value="#{#customFieldValues.iterator()}" />
+		<while condition="#{#customFieldValuesItr.hasNext()}">
+			<var name="customField" value="#{#customFieldValuesItr.next()}" />
+			<startTag name="CustomField">
+				<attribute name="name" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#customField, 'name')}" />
+				<attribute name="value" value="#{T(com.unifier.core.utils.JsonUtils).getAsString(#customField, 'value')}" />
+			</startTag>
+			<endTag name="CustomField" />
+		</while>
 		<endTag name="CustomFields" />
 	</method>
 
